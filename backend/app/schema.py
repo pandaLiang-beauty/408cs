@@ -141,6 +141,26 @@ CREATE TABLE IF NOT EXISTS draft_tokens (
   used_at     TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_dt_exp ON draft_tokens(expires_at);
+
+-- 学习排程：只安排「天」，不排钟点。一天套卷、一天强化交替；近三年真题留作考前模考。
+CREATE TABLE IF NOT EXISTS plan_config (
+  id         INTEGER PRIMARY KEY CHECK (id = 1),
+  exam_date  TEXT NOT NULL DEFAULT '2026-12-19',
+  start_date TEXT NOT NULL DEFAULT '',          -- 排程起始日（首次生成时写今天）
+  mock_years TEXT NOT NULL DEFAULT '2024,2025,2026',
+  mock_days  INTEGER NOT NULL DEFAULT 21        -- 考前多少天开始安排模考
+);
+
+CREATE TABLE IF NOT EXISTS daily_tasks (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  plan_date  TEXT NOT NULL,                     -- YYYY-MM-DD（本地日期）
+  kind       TEXT NOT NULL,                     -- exam(精做真题) | mock(模考) | reinforce(强化)
+  ref_year   INTEGER,                           -- 真题/模考年份；强化为 NULL
+  session_id INTEGER REFERENCES sessions(id) ON DELETE SET NULL,
+  status     TEXT NOT NULL DEFAULT 'todo',      -- todo | done
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_task_date ON daily_tasks(plan_date, status);
 """
 
 

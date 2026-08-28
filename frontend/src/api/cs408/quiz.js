@@ -43,6 +43,12 @@ export const deleteNote = (id) => axiosInstance.delete(`/notes/${id}`)
 export const getNotebook = () => axiosInstance.get('/notebook')
 
 // 大模型在线配置
+// 学习排程（首页任务单）
+export const getPlan = () => axiosInstance.get('/plan')
+export const getPlanCalendar = (ym) => axiosInstance.get('/plan/calendar', { params: ym ? { ym } : {} })
+export const startTask = (id) => axiosInstance.post(`/plan/tasks/${id}/start`)
+export const setExamDate = (exam_date) => axiosInstance.put('/plan/config', { exam_date })
+
 // 大模型多档配置：可存多个网关档，选一个使用
 export const getLlmConfig = () => axiosInstance.get('/settings/llm')
 export const createLlmProfile = (payload) => axiosInstance.post('/settings/llm/profiles', payload)

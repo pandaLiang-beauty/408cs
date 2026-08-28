@@ -10,7 +10,7 @@ import os
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel
 
-from . import auth, grading, scheduler, llmconfig, upload
+from . import auth, grading, scheduler, llmconfig, upload, plan
 from .config import DRAFTS_DIR
 from .db import get_db
 
@@ -116,6 +116,10 @@ class PromptIn(BaseModel):
     grade_prompt: str = ''
 
 
+class PlanConfigIn(BaseModel):
+    exam_date: str
+
+
 @router.get('/health')
 def health():
     return {'ok': True}
@@ -207,39 +211,42 @@ def _reinforce_question_ids(conn, all_pool: bool):
     return picked
 
 
-@router.post('/sessions')
-def create_session(body: CreateSessionIn, conn=Depends(get_db), _=Depends(auth.require_user)):
-    """建/续一场做题。fresh=False 时优先续接未交卷的同类卷；fresh=True 另起新记录。"""
-    if body.kind == 'exam':
-        if not body.year:
+def _open_session_id(conn, kind: str, year=None, all_pool: bool = False, fresh: bool = False) -> int:
+    """建/续一场做题，返回 session id。fresh=False 时优先续接未交卷的同类卷。"""
+    if kind == 'exam':
+        if not year:
             raise HTTPException(status_code=400, detail='真题卷需指定年份')
-        if not body.fresh:
-            open_s = conn.execute(
-                "SELECT * FROM sessions WHERE kind='exam' AND year=? AND status='doing'"
-                ' ORDER BY id DESC LIMIT 1', (body.year,)).fetchone()
-            if open_s:
-                return _session_payload(conn, open_s)
-        qids = _exam_question_ids(conn, body.year)
+        if not fresh:
+            s = conn.execute("SELECT id FROM sessions WHERE kind='exam' AND year=? AND status='doing'"
+                             ' ORDER BY id DESC LIMIT 1', (year,)).fetchone()
+            if s:
+                return s['id']
+        qids = _exam_question_ids(conn, year)
         if not qids:
             raise HTTPException(status_code=404, detail='该年份暂无题目')
-    elif body.kind == 'reinforce':
-        if not body.fresh:
-            open_s = conn.execute(
-                "SELECT * FROM sessions WHERE kind='reinforce' AND status='doing'"
-                ' ORDER BY id DESC LIMIT 1').fetchone()
-            if open_s:
-                return _session_payload(conn, open_s)
-        qids = _reinforce_question_ids(conn, body.all)
+    elif kind == 'reinforce':
+        if not fresh:
+            s = conn.execute("SELECT id FROM sessions WHERE kind='reinforce' AND status='doing'"
+                             ' ORDER BY id DESC LIMIT 1').fetchone()
+            if s:
+                return s['id']
+        qids = _reinforce_question_ids(conn, all_pool)
     else:
         raise HTTPException(status_code=400, detail='未知卷型')
-
     cur = conn.execute('INSERT INTO sessions(kind,year,status) VALUES(?,?,?)',
-                       (body.kind, body.year if body.kind == 'exam' else None, 'doing'))
+                       (kind, year if kind == 'exam' else None, 'doing'))
     sid = cur.lastrowid
     for pos, qid in enumerate(qids):
         conn.execute('INSERT INTO session_items(session_id,question_id,position) VALUES(?,?,?)',
                      (sid, qid, pos))
     conn.commit()
+    return sid
+
+
+@router.post('/sessions')
+def create_session(body: CreateSessionIn, conn=Depends(get_db), _=Depends(auth.require_user)):
+    """建/续一场做题。fresh=False 时优先续接未交卷的同类卷；fresh=True 另起新记录。"""
+    sid = _open_session_id(conn, body.kind, body.year, body.all, body.fresh)
     return _session_payload(conn, _get_session(conn, sid))
 
 
@@ -502,6 +509,48 @@ def test_llm(profile_id: int, conn=Depends(get_db), _=Depends(auth.require_user)
     except Exception as e:
         raise HTTPException(status_code=502, detail='调用失败：' + str(e))
     return {'ok': True, 'reply': (reply or '').strip()[:100]}
+
+
+@router.get('/plan')
+def get_plan(conn=Depends(get_db), _=Depends(auth.require_user)):
+    """首页排程：倒计时 + 今日任务 + 补做 + 未来预排。"""
+    return plan.view(conn)
+
+
+@router.get('/plan/calendar')
+def get_calendar(ym: str | None = None, conn=Depends(get_db), _=Depends(auth.require_user)):
+    """月历视图：过去/今天用落库任务，未来用预排。ym 形如 2026-08，缺省当月。"""
+    return plan.calendar(conn, ym)
+
+
+@router.post('/plan/tasks/{tid}/start')
+def start_task(tid: int, conn=Depends(get_db), _=Depends(auth.require_user)):
+    """开始某项任务：建/续对应的卷，并把 session 绑到任务上（交卷后任务自动算完成）。"""
+    plan.ensure_through_today(conn)
+    r = conn.execute('SELECT * FROM daily_tasks WHERE id=?', (tid,)).fetchone()
+    if not r:
+        raise HTTPException(status_code=404, detail='任务不存在')
+    if r['session_id']:
+        s = conn.execute('SELECT * FROM sessions WHERE id=?', (r['session_id'],)).fetchone()
+        if s:
+            return {'session_id': s['id'], 'mode': s['kind'], 'year': s['year']}
+    if r['kind'] in ('exam', 'mock'):
+        sid = _open_session_id(conn, 'exam', r['ref_year'])
+        mode, year = 'exam', r['ref_year']
+    else:
+        sid = _open_session_id(conn, 'reinforce')
+        mode, year = 'reinforce', None
+    conn.execute('UPDATE daily_tasks SET session_id=? WHERE id=?', (sid, tid))
+    conn.commit()
+    return {'session_id': sid, 'mode': mode, 'year': year}
+
+
+@router.put('/plan/config')
+def put_plan_config(body: PlanConfigIn, conn=Depends(get_db), _=Depends(auth.require_user)):
+    plan.ensure_config(conn)
+    conn.execute('UPDATE plan_config SET exam_date=? WHERE id=1', (body.exam_date,))
+    conn.commit()
+    return plan.view(conn)
 
 
 
