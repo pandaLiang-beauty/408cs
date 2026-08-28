@@ -2,13 +2,13 @@
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import auth, schema
 from .api import router
 from .upload import router as upload_router
-from .config import DRAFTS_DIR, settings
+from .config import DIST_DIR, DRAFTS_DIR, settings
 from .db import connect
 from . import llmconfig
 
@@ -45,3 +45,13 @@ async def _http_exc(request, exc: HTTPException):
 app.include_router(router)
 app.include_router(upload_router)
 app.mount('/drafts', StaticFiles(directory=str(DRAFTS_DIR)), name='drafts')
+
+# 生产单端口：前端 dist 由后端托管。必须最后注册——前面的 /api、/drafts、/u 先匹配，
+# 剩下的路径命中静态文件就返回文件，否则回落 index.html（Vue history 模式深链接）。
+if DIST_DIR.is_dir():
+    @app.get('/{full_path:path}', include_in_schema=False)
+    def _spa(full_path: str):
+        target = (DIST_DIR / full_path).resolve()
+        if full_path and target.is_file() and DIST_DIR.resolve() in target.parents:
+            return FileResponse(target)
+        return FileResponse(DIST_DIR / 'index.html')

@@ -7,6 +7,8 @@ DATA_DIR = BASE_DIR / 'data'
 DRAFTS_DIR = DATA_DIR / 'drafts'
 RAW_DIR = DATA_DIR / 'raw'
 DB_PATH = DATA_DIR / 'study.db'
+# 生产单端口部署：后端直接托管前端构建产物（开发时由 Vite 提供，此目录不存在则跳过）。
+DIST_DIR = BASE_DIR.parent / 'frontend' / 'dist'
 
 
 def _load_env_files():
