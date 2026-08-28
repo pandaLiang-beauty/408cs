@@ -31,6 +31,8 @@ class Settings:
     GRADE_API_KEY = os.environ.get('GRADE_API_KEY', '')
     GRADE_MODEL = os.environ.get('GRADE_MODEL') or 'gpt-5.6-luna'
     PORT = int(os.environ.get('STUDY_PORT', '8408'))
+    # 手机扫码上传草稿用的对外地址。留空=自动取局域网 IP:PORT；上线后填公网地址(如 https://x.com/cs408)
+    PUBLIC_BASE = os.environ.get('STUDY_PUBLIC_BASE', '')
 
 
 settings = Settings()

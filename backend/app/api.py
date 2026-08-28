@@ -10,7 +10,7 @@ import os
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel
 
-from . import auth, grading, scheduler, llmconfig
+from . import auth, grading, scheduler, llmconfig, upload
 from .config import DRAFTS_DIR
 from .db import get_db
 
@@ -82,6 +82,10 @@ class PatchItemIn(BaseModel):
 class DraftIn(BaseModel):
     question_id: int
     image_base64: str
+
+
+class DraftTokenIn(BaseModel):
+    question_id: int
 
 
 class GradeIn(BaseModel):
@@ -299,7 +303,7 @@ def submit(sid: int, conn=Depends(get_db), _=Depends(auth.require_user)):
 
 @router.post('/sessions/{sid}/draft')
 def save_draft(sid: int, body: DraftIn, conn=Depends(get_db), _=Depends(auth.require_user)):
-    """草稿纸：每场做题各存一份（文件名带 session）。"""
+    """草稿纸（本机选图）：每场做题各存一份（文件名带 session）。"""
     _get_session(conn, sid)
     it = conn.execute('SELECT id FROM session_items WHERE session_id=? AND question_id=?',
                       (sid, body.question_id)).fetchone()
@@ -312,6 +316,26 @@ def save_draft(sid: int, body: DraftIn, conn=Depends(get_db), _=Depends(auth.req
                  (fname, scheduler.now_iso(), it['id']))
     conn.commit()
     return {'ok': True, 'draft_url': '/drafts/' + fname}
+
+
+@router.post('/sessions/{sid}/draft-token')
+def draft_token(sid: int, body: DraftTokenIn, conn=Depends(get_db), _=Depends(auth.require_user)):
+    """签发一次性上传链接（供电脑端生成二维码，手机扫码上传草稿纸）。"""
+    _get_session(conn, sid)
+    if not conn.execute('SELECT 1 FROM session_items WHERE session_id=? AND question_id=?',
+                        (sid, body.question_id)).fetchone():
+        raise HTTPException(status_code=404, detail='该题不在此卷中')
+    return upload.issue_token(conn, sid, body.question_id)
+
+
+@router.get('/sessions/{sid}/draft')
+def get_draft(sid: int, question_id: int, conn=Depends(get_db), _=Depends(auth.require_user)):
+    """轮询用：手机传完后电脑端据此刷新草稿缩略图。"""
+    it = conn.execute('SELECT draft_path, updated_at FROM session_items'
+                      ' WHERE session_id=? AND question_id=?', (sid, question_id)).fetchone()
+    if not it:
+        raise HTTPException(status_code=404, detail='该题不在此卷中')
+    return {'draft_url': _draft_url(it['draft_path']), 'updated_at': it['updated_at']}
 
 
 @router.post('/sessions/{sid}/grade_subjective')

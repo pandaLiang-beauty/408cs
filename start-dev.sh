@@ -14,7 +14,9 @@ if [[ -f "$ROOT_DIR/.env.local" ]]; then
   set +a
 fi
 
-BACKEND_HOST="${STUDY_BACKEND_HOST:-127.0.0.1}"
+# 监听 0.0.0.0：手机要能扫码访问 /u/<token> 上传草稿纸（同一局域网）。
+# 想只本机可见就设 STUDY_BACKEND_HOST=127.0.0.1（那时二维码只能自己电脑打开）。
+BACKEND_HOST="${STUDY_BACKEND_HOST:-0.0.0.0}"
 BACKEND_PORT="${STUDY_PORT:-8408}"
 FRONTEND_PORT="${STUDY_FRONTEND_PORT:-3000}"  # 前端端口在 frontend/vite.config.js 中固定为 3000
 

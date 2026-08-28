@@ -24,7 +24,7 @@
         <section class="rounded-xl border border-line bg-paper p-[18px] shadow">
           <h2 class="mb-1.5 text-base font-semibold">📄 真题套卷</h2>
           <p class="mb-3 text-[13px] leading-relaxed text-muted">
-            选择一年，按考试试卷做整套选择题。每题可标「模糊」、传草稿纸、写笔记。
+            选择一年，按真实试卷分页做整套题（单选 + 综合）。每题可标「模糊」、扫码传草稿纸、写笔记。
           </p>
           <div class="grid grid-cols-[repeat(auto-fill,minmax(92px,1fr))] gap-2.5">
             <button

@@ -6,14 +6,19 @@
       <Scorecard v-if="store.graded && store.summary" :summary="store.summary" />
 
       <div class="mx-auto max-w-[820px] rounded-md border border-line bg-paper px-10 py-8 shadow-lg max-sm:px-4">
-        <div class="mb-2 border-b-2 border-ink pb-3.5 text-center">
+        <!-- 卷头：只在第一页出现完整卷头，后续页出简版页眉 -->
+        <div v-if="page === 1" class="mb-2 border-b-2 border-ink pb-3.5 text-center">
           <h1 class="font-song text-2xl tracking-wide">{{ store.title }}</h1>
           <div class="text-[13px] text-muted">{{ paperMeta }}</div>
+        </div>
+        <div v-else class="mb-3 flex items-center justify-between border-b border-line pb-2 text-[12px] text-muted">
+          <span class="font-song">{{ store.title }}</span>
+          <span>第 {{ page }} 页</span>
         </div>
 
         <p v-if="!store.questions.length" class="py-10 text-center text-muted">暂无题目。</p>
 
-        <template v-for="(group, gi) in groups" :key="gi">
+        <template v-for="(group, gi) in visibleGroups" :key="gi">
           <h2
             v-if="group.title"
             class="mt-6 border-b border-dashed border-line pb-1 font-song text-[17px] font-bold"
@@ -22,6 +27,25 @@
           </h2>
           <QuestionCard v-for="item in group.items" :key="item.q.id" :question="item.q" :index="item.index" />
         </template>
+
+        <!-- 卷尾页码（试卷感） -->
+        <div v-if="isExam && totalPages > 1" class="mt-6 border-t border-line pt-3 text-center font-song text-[13px] text-muted">
+          — 第 {{ page }} 页 · 共 {{ totalPages }} 页 —
+        </div>
+      </div>
+
+      <!-- 翻页条 -->
+      <div v-if="isExam && totalPages > 1" class="mx-auto mt-3 flex max-w-[820px] flex-wrap items-center justify-center gap-1.5">
+        <el-button size="small" :disabled="page === 1" @click="go(page - 1)">上一页</el-button>
+        <button
+          v-for="p in totalPages"
+          :key="p"
+          type="button"
+          class="min-w-[30px] rounded border px-2 py-1 text-[13px] transition"
+          :class="p === page ? 'border-primary bg-primary-soft font-bold text-primary' : 'border-line bg-white hover:border-primary'"
+          @click="go(p)"
+        >{{ p }}</button>
+        <el-button size="small" :disabled="page === totalPages" @click="go(page + 1)">下一页</el-button>
       </div>
 
       <div class="mx-auto mt-4 flex max-w-[820px] items-center justify-between">
@@ -37,6 +61,9 @@
         </div>
       </div>
     </template>
+
+    <DraftDialog />
+    <NoteDrawer />
   </main>
 </template>
 
@@ -47,15 +74,23 @@ import { ElMessage } from 'element-plus'
 import { usePaperStore } from '@/stores/paper'
 import QuestionCard from '@/components/QuestionCard.vue'
 import Scorecard from '@/components/Scorecard.vue'
+import DraftDialog from '@/components/DraftDialog.vue'
+import NoteDrawer from '@/components/NoteDrawer.vue'
 
 const route = useRoute()
 const router = useRouter()
 const store = usePaperStore()
 const submitting = ref(false)
+const page = ref(1)
+
+const CHOICE_PER_PAGE = 10   // 真题卷：每页 10 道单选
+const SUBJ_PER_PAGE = 2      // 综合大题篇幅长，每页 2 道
+const isExam = computed(() => store.mode === 'exam')
 
 // 进卷：带 sid 就恢复那一场；否则建/续一场并把 sid 写回 query（刷新可恢复）。
 async function load() {
   const { mode, year, all, sid, fresh } = route.query
+  page.value = 1
   try {
     if (sid) {
       await store.loadSession(Number(sid))
@@ -77,18 +112,37 @@ async function load() {
 onMounted(load)
 watch(() => route.fullPath, load)
 
-
-// 按正常试卷组织：不按科目分类。选择题连续为一节、综合大题为一节。
-const groups = computed(() => {
+// 真题卷按正常试卷组织并分页：单选连续为一节、综合大题为一节；强化卷保持单页连续流。
+const pages = computed(() => {
   const qs = [...store.questions].sort((a, b) => a.number - b.number)
-  if (store.mode !== 'exam') return [{ title: '', items: qs.map((q, i) => ({ q, index: i })) }]
+  if (!isExam.value) return [[{ title: '', items: qs.map((q, i) => ({ q, index: i })) }]]
+
   const choice = qs.filter((q) => q.qtype === 'choice')
   const subjective = qs.filter((q) => q.qtype === 'subjective')
   const out = []
-  if (choice.length) out.push({ title: '一、单项选择题', items: choice.map((q, i) => ({ q, index: i })) })
-  if (subjective.length) out.push({ title: '二、综合应用题', items: subjective.map((q, i) => ({ q, index: choice.length + i })) })
-  return out
+  for (let i = 0; i < choice.length; i += CHOICE_PER_PAGE) {
+    out.push([{
+      title: i === 0 ? '一、单项选择题' : '一、单项选择题（续）',
+      items: choice.slice(i, i + CHOICE_PER_PAGE).map((q, k) => ({ q, index: i + k })),
+    }])
+  }
+  for (let i = 0; i < subjective.length; i += SUBJ_PER_PAGE) {
+    out.push([{
+      title: i === 0 ? '二、综合应用题' : '二、综合应用题（续）',
+      items: subjective.slice(i, i + SUBJ_PER_PAGE).map((q, k) => ({ q, index: choice.length + i + k })),
+    }])
+  }
+  return out.length ? out : [[{ title: '', items: [] }]]
 })
+
+const totalPages = computed(() => pages.value.length)
+const visibleGroups = computed(() => pages.value[Math.min(page.value, totalPages.value) - 1] || [])
+
+function go(p) {
+  if (p < 1 || p > totalPages.value) return
+  page.value = p
+  window.scrollTo({ top: 0, behavior: 'smooth' })
+}
 
 const statusText = computed(() =>
   store.graded ? '已交卷' : `已作答 ${store.answeredCount} / ${store.questions.length}`,
@@ -97,18 +151,19 @@ const statusText = computed(() =>
 // 卷头信息：真题套卷是真 408 结构（单选 80 + 综合 70 = 150）；强化卷只报题数。
 const paperMeta = computed(() => {
   const qs = store.questions
-  if (store.mode === 'exam') {
+  if (isExam.value) {
     const c = qs.filter((q) => q.qtype === 'choice').length
     const s = qs.filter((q) => q.qtype === 'subjective').length
-    return `单选 ${c} 题 · 综合 ${s} 题 · 满分 150 分 · 选出答案后点「交卷」`
+    return `单选 ${c} 题 · 综合 ${s} 题 · 满分 150 分 · 共 ${totalPages.value} 页 · 选出答案后点「交卷」`
   }
-  return `共 ${qs.length} 题 · 选出答案后点「交卷」`
+  return `共 ${qs.length} 题 · 同知识点强化 · 选出答案后点「交卷」`
 })
 
 async function onSubmit() {
   submitting.value = true
   try {
     await store.grade()
+    page.value = 1
     window.scrollTo(0, 0)
   } catch {
     ElMessage.error('交卷失败，请检查后端是否运行')

@@ -15,7 +15,7 @@
         >
           ⚙️ 设置
         </RouterLink>
-        <span class="text-xs text-[#c9c2b4]">{{ store.title }}</span>
+        <span v-if="route.name === 'paper' && store.title" class="text-xs text-[#c9c2b4]">{{ store.title }}</span>
         <button
           v-if="auth.authenticated"
           type="button"
@@ -31,13 +31,14 @@
 </template>
 
 <script setup>
-import { RouterView, RouterLink, useRouter } from 'vue-router'
+import { RouterView, RouterLink, useRouter, useRoute } from 'vue-router'
 import { usePaperStore } from '@/stores/paper'
 import { useAuthStore } from '@/stores/auth'
 
 const store = usePaperStore()
 const auth = useAuthStore()
 const router = useRouter()
+const route = useRoute()
 
 // 退出登录后回到登录页（logout 内部已清空本地状态）。
 async function onLogout() {

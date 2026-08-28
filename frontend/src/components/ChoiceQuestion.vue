@@ -10,6 +10,14 @@
         :title="answer.fuzzy ? '已标模糊（点此取消）' : '标记模糊（拿不准）'"
         @click="store.toggleFuzzy(question.id)"
       >{{ answer.fuzzy ? '▲' : '△' }}</button>
+      <button
+        type="button"
+        class="iconbtn"
+        :class="{ 'iconbtn-on': hasDraft }"
+        :title="hasDraft ? '已有草稿纸（点开查看/重传）' : '上传草稿纸（手机扫码拍照）'"
+        @click="store.openDraft(question.id)"
+      >📷<span v-if="hasDraft" class="ml-0.5 text-[11px]">✓</span></button>
+      <button type="button" class="iconbtn" title="本题笔记（右侧打开）" @click="store.openNote(question.id)">📝</button>
     </div>
     <div class="qhtml font-song text-[16px] leading-[1.9]">
       <span v-if="mode === 'reinforce' && question.year" class="text-muted">[{{ origin }}] </span>
@@ -39,33 +47,27 @@
       </button>
     </div>
 
-    <div class="mt-2 flex flex-wrap items-center gap-2">
-      <button type="button" class="chip" @click="open = !open">📝 草稿 / 笔记</button>
-      <span v-if="graded && result" class="badge" :class="badgeClass">{{ badgeText }}</span>
-    </div>
-
-    <div v-if="open" class="mt-2">
-      <DraftNote :question="question" />
+    <div v-if="graded && result" class="mt-2">
+      <span class="badge" :class="badgeClass">{{ badgeText }}</span>
     </div>
   </article>
 </template>
 
 <script setup>
-import { ref, computed } from 'vue'
+import { computed } from 'vue'
 import { usePaperStore } from '@/stores/paper'
-import DraftNote from './DraftNote.vue'
 
 const props = defineProps({
   question: { type: Object, required: true },
   index: { type: Number, default: 0 },
 })
 const store = usePaperStore()
-const open = ref(false)
 
 const mode = computed(() => store.mode)
 const graded = computed(() => store.graded)
 const answer = computed(() => store.answers[props.question.id] || { chosen: '', fuzzy: false })
 const result = computed(() => store.results[props.question.id])
+const hasDraft = computed(() => !!store.items?.[props.question.id]?.draft_url)
 const displayNo = computed(() => (mode.value === 'exam' ? props.question.number : props.index + 1))
 const origin = computed(() =>
   props.question.source === 'simulate' ? '模拟' + props.question.year : props.question.year,
@@ -103,23 +105,13 @@ const badgeClass = computed(() => {
 })
 </script>
 <style scoped>
-.chip {
-  font-size: 12px;
-  padding: 5px 11px;
-  border-radius: 20px;
-  border: 1px solid #ddd7cc;
-  background: #fff;
-  color: #6d675d;
-  cursor: pointer;
-  transition: 0.12s;
-}
-.chip:hover { border-color: #b8791d; color: #b8791d; }
-.chip:disabled { opacity: 0.5; cursor: default; }
-.chip-on { background: #f6ecd7; border-color: #b8791d; color: #b8791d; font-weight: 600; }
 .tri { background: none; border: none; padding: 0 2px; font-size: 18px; line-height: 1; color: #b9b3a7; cursor: pointer; transition: 0.12s; }
 .tri:hover { color: #b8791d; }
 .tri:disabled { cursor: default; }
 .tri-on { color: #b8791d; }
+.iconbtn { background: none; border: none; padding: 0 3px; font-size: 14px; line-height: 1; opacity: 0.45; cursor: pointer; transition: 0.12s; }
+.iconbtn:hover { opacity: 1; }
+.iconbtn-on { opacity: 1; color: #2f7d47; }
 .badge { font-size: 12px; padding: 2px 9px; border-radius: 20px; font-weight: 600; }
 .badge-ok { background: #e3f1e6; color: #2f7d47; }
 .badge-bad { background: #f7e3e2; color: #c23b3b; }

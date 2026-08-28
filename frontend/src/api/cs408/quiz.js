@@ -23,6 +23,14 @@ export const submitSession = (sid) => axiosInstance.post(`/sessions/${sid}/submi
 export const saveDraft = (sid, question_id, image_base64) =>
   axiosInstance.post(`/sessions/${sid}/draft`, { question_id, image_base64 })
 
+// 签发一次性上传链接（用于生成二维码，手机扫码上传草稿纸）
+export const getDraftToken = (sid, question_id) =>
+  axiosInstance.post(`/sessions/${sid}/draft-token`, { question_id })
+
+// 轮询该题草稿（手机传完后电脑端刷新）
+export const getDraftStatus = (sid, question_id) =>
+  axiosInstance.get(`/sessions/${sid}/draft`, { params: { question_id } })
+
 // 大题 AI 批改（写回本场记录）
 export const gradeSubjective = (sid, question_id, answer_text) =>
   axiosInstance.post(`/sessions/${sid}/grade_subjective`, { question_id, answer_text })

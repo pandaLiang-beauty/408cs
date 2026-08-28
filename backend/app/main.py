@@ -7,6 +7,7 @@ from fastapi.staticfiles import StaticFiles
 
 from . import auth, schema
 from .api import router
+from .upload import router as upload_router
 from .config import DRAFTS_DIR, settings
 from .db import connect
 from . import llmconfig
@@ -42,4 +43,5 @@ async def _http_exc(request, exc: HTTPException):
 
 
 app.include_router(router)
+app.include_router(upload_router)
 app.mount('/drafts', StaticFiles(directory=str(DRAFTS_DIR)), name='drafts')

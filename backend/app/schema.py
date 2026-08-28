@@ -129,6 +129,18 @@ CREATE TABLE IF NOT EXISTS app_settings (
   active_profile_id INTEGER REFERENCES llm_profiles(id) ON DELETE SET NULL,
   grade_prompt      TEXT NOT NULL DEFAULT ''
 );
+
+-- 草稿纸手机上传令牌：电脑上生成二维码 → 手机扫码打开上传页 → 图片写回对应做题记录。
+-- token 本身就是凭据（不可猜、单次、短时效），故上传页无需登录。
+CREATE TABLE IF NOT EXISTS draft_tokens (
+  token       TEXT PRIMARY KEY,
+  session_id  INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  question_id INTEGER NOT NULL REFERENCES questions(id) ON DELETE CASCADE,
+  created_at  TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  expires_at  TEXT NOT NULL,
+  used_at     TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_dt_exp ON draft_tokens(expires_at);
 """
 
 

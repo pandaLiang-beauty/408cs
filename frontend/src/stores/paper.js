@@ -101,9 +101,16 @@ export const usePaperStore = defineStore('paper', () => {
     items.value[qid] = { ...(items.value[qid] || {}), ...patch }
   }
 
+  // 弹层归属：草稿二维码弹窗 / 笔记右侧抽屉，各只挂一个实例，由卷面统一渲染
+  const draftQid = ref(null)
+  const noteQid = ref(null)
+  const openDraft = (qid) => (draftQid.value = qid)
+  const openNote = (qid) => (noteQid.value = qid)
+
   return {
     sessionId, mode, year, title, questions, answers, items, graded, loading, summary,
-    results, answeredCount,
+    results, answeredCount, draftQid, noteQid,
     loadSession, startSession, setChosen, toggleFuzzy, grade, flushAll, patchLocalItem,
+    openDraft, openNote,
   }
 })
