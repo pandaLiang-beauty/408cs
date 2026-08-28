@@ -13,6 +13,16 @@
             <div class="text-[13px] text-muted">
               初试 {{ plan.exam_date }} · 真题进度 {{ plan.progress.papers_done }} / {{ plan.progress.papers_total }} 套
             </div>
+            <div class="mt-1 text-[13px] text-muted">
+              知识点 {{ plan.progress.points_covered }} / {{ plan.progress.points_total }} 已练
+              <span class="text-ok">· 掌握 {{ plan.progress.points_ok }}</span>
+              <span class="text-amber">· 待强化 {{ plan.progress.points_weak }}</span>
+            </div>
+            <div class="mt-1 h-1.5 w-[260px] overflow-hidden rounded-full bg-line">
+              <div class="h-full bg-ok transition-all" :style="{ width: okPct + '%' }"></div>
+              <div class="-mt-1.5 h-full bg-amber transition-all"
+                   :style="{ width: weakPct + '%', marginLeft: okPct + '%' }"></div>
+            </div>
           </div>
           <div class="font-song text-[15px]">今天 · {{ fmtDate(plan.today) }} {{ plan.weekday }}</div>
         </div>
@@ -139,6 +149,16 @@ function fmtDate(s) {
 const monthLabel = computed(() => {
   const [y, m] = (cal.value?.month || '').split('-')
   return `${y} 年 ${Number(m)} 月`
+})
+
+// 知识点进度条：绿=已掌握、黄=待强化，分母为真题里出现过的全部知识点
+const okPct = computed(() => {
+  const p = plan.value?.progress
+  return p?.points_total ? (p.points_ok / p.points_total) * 100 : 0
+})
+const weakPct = computed(() => {
+  const p = plan.value?.progress
+  return p?.points_total ? (p.points_weak / p.points_total) * 100 : 0
 })
 
 // 日历取值：按“日”找当天的排程条目

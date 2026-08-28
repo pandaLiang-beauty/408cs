@@ -122,6 +122,28 @@ def _due_points(conn) -> int:
                         (scheduler.now_iso(),)).fetchone()['c']
 
 
+def point_progress(conn) -> dict:
+    """知识点进度：总量 / 已练过 / 已掌握 / 待强化。
+
+    分母取真题选择题上出现过的全部知识点（大题暂无标签，故不计入）。
+    「已练」= 出现在任一已交卷记录里；「待强化」= 还在薄弱池中；两者之差即「已掌握」。
+    """
+    from . import scheduler
+    total, covered = set(), set()
+    for r in conn.execute("SELECT tags FROM questions WHERE source='exam' AND qtype='choice'"):
+        total.update(scheduler.split_tags(r['tags']))
+    for r in conn.execute(
+            'SELECT DISTINCT q.tags FROM session_items si'
+            ' JOIN questions q ON q.id=si.question_id'
+            ' JOIN sessions s ON s.id=si.session_id'
+            " WHERE s.status='graded' AND q.qtype='choice'"):
+        covered.update(scheduler.split_tags(r['tags']))
+    covered &= total
+    weak = {r['tag'] for r in conn.execute('SELECT tag FROM point_schedule')} & total
+    return {'points_total': len(total), 'points_covered': len(covered),
+            'points_weak': len(weak), 'points_ok': len(covered - weak)}
+
+
 def describe(conn, kind: str, ref_year) -> dict:
     if kind in ('exam', 'mock'):
         c, s = _counts(conn, ref_year)
@@ -211,5 +233,6 @@ def view(conn) -> dict:
         'tasks': [task_public(conn, r) for r in today_rows],
         'overdue': [task_public(conn, r) for r in overdue_rows],
         'upcoming': upcoming(conn, cfg),
-        'progress': {'papers_total': len(main) + len(mocks), 'papers_done': len(done_years)},
+        'progress': {'papers_total': len(main) + len(mocks), 'papers_done': len(done_years),
+                     **point_progress(conn)},
     }
