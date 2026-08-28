@@ -6,6 +6,7 @@
 import base64
 import json
 import os
+from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel
@@ -69,14 +70,14 @@ class LoginIn(BaseModel):
 
 class CreateSessionIn(BaseModel):
     kind: str = 'exam'          # exam | reinforce
-    year: int | None = None     # exam 必填
+    year: Optional[int] = None  # exam 必填
     all: bool = False           # reinforce：True=不限到期全池
     fresh: bool = False         # True=另起一场新记录（「再做一次」）
 
 
 class PatchItemIn(BaseModel):
-    chosen: str | None = None
-    fuzzy: bool | None = None
+    chosen: Optional[str] = None
+    fuzzy: Optional[bool] = None
 
 
 class DraftIn(BaseModel):
@@ -94,8 +95,8 @@ class GradeIn(BaseModel):
 
 
 class NoteIn(BaseModel):
-    question_id: int | None = None
-    session_id: int | None = None
+    question_id: Optional[int] = None
+    session_id: Optional[int] = None
     body: str = ''
 
 
@@ -105,7 +106,7 @@ class LlmProfileIn(BaseModel):
     base_url: str = ''
     model: str = ''
     temperature: float = 0.2
-    api_key: str | None = None          # 留空=保留原密钥（前端不回填明文）
+    api_key: Optional[str] = None       # 留空=保留原密钥（前端不回填明文）
 
 
 class ActiveIn(BaseModel):
@@ -518,7 +519,7 @@ def get_plan(conn=Depends(get_db), _=Depends(auth.require_user)):
 
 
 @router.get('/plan/calendar')
-def get_calendar(ym: str | None = None, conn=Depends(get_db), _=Depends(auth.require_user)):
+def get_calendar(ym: Optional[str] = None, conn=Depends(get_db), _=Depends(auth.require_user)):
     """月历视图：过去/今天用落库任务，未来用预排。ym 形如 2026-08，缺省当月。"""
     return plan.calendar(conn, ym)
 

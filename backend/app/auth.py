@@ -5,6 +5,7 @@ import hmac
 import json
 import secrets
 import time
+from typing import Optional
 
 from fastapi import HTTPException, Request, Response
 
@@ -13,7 +14,7 @@ from .config import settings
 COOKIE = 'cs408_session'
 
 
-def hash_password(pw: str, salt: str | None = None) -> str:
+def hash_password(pw: str, salt: Optional[str] = None) -> str:
     salt = salt or secrets.token_hex(16)
     dk = hashlib.pbkdf2_hmac('sha256', pw.encode(), salt.encode(), 100_000)
     return f'pbkdf2$100000${salt}${dk.hex()}'

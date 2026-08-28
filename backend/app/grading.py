@@ -3,6 +3,7 @@
 import json
 import re
 import urllib.request
+from typing import Optional
 
 from .config import settings
 
@@ -19,7 +20,7 @@ def cfg_from_settings() -> dict:
             'api_key': settings.GRADE_API_KEY, 'model': settings.GRADE_MODEL, 'temperature': 0.2}
 
 
-def configured(cfg: dict | None = None) -> bool:
+def configured(cfg: Optional[dict] = None) -> bool:
     cfg = cfg or cfg_from_settings()
     return bool(cfg.get('api_key') and cfg.get('base_url') and cfg.get('model'))
 
@@ -40,7 +41,7 @@ def _post(url, headers, body, timeout):
         return json.loads(r.read().decode('utf-8'))
 
 
-def chat(cfg: dict, messages, temperature: float | None = None, timeout: int = 120) -> str:
+def chat(cfg: dict, messages, temperature: Optional[float] = None, timeout: int = 120) -> str:
     """发一次对话补全，返回助手文本。按 cfg['api_format'] 适配请求/解析。网关常拒默认 UA，故带浏览器 UA。"""
     base = (cfg.get('base_url') or '').rstrip('/')
     model = cfg.get('model') or ''

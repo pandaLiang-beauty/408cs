@@ -9,6 +9,7 @@
 只把「到今天为止」的任务落库；往后 7 天是按当前进度算出来的预排（不落库，会自动自我校正）。
 """
 from datetime import date, datetime, timedelta
+from typing import Optional
 
 WEEKDAYS = ['周一', '周二', '周三', '周四', '周五', '周六', '周日']
 
@@ -168,7 +169,7 @@ def upcoming(conn, cfg, days: int = 7) -> list:
     return simulate_range(conn, cfg, t + timedelta(days=1), t + timedelta(days=days))
 
 
-def calendar(conn, ym: str | None = None) -> dict:
+def calendar(conn, ym: Optional[str] = None) -> dict:
     """某个月的排程日历：已过去与今天用落库数据，未来用预排。ym 形如 2026-08。"""
     cfg = ensure_through_today(conn)
     refresh_status(conn)
