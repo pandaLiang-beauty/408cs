@@ -1,0 +1,45 @@
+"""FastAPI 入口：初始化库、挂路由、草稿静态、统一错误为 {error}。"""
+from contextlib import asynccontextmanager
+
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
+
+from . import auth, schema
+from .api import router
+from .config import DRAFTS_DIR, settings
+from .db import connect
+from . import llmconfig
+
+
+def _init_and_seed() -> None:
+    """建表；用 .env.local 的 STUDY_INITIAL_PASSWORD 同步单用户密码（env 为准）；首次播种大模型配置。"""
+    with connect() as conn:
+        schema.initialize(conn)
+        if settings.INITIAL_PASSWORD:
+            h = auth.hash_password(settings.INITIAL_PASSWORD)
+            row = conn.execute('SELECT id FROM users ORDER BY id LIMIT 1').fetchone()
+            if row:
+                conn.execute('UPDATE users SET password_hash=? WHERE id=?', (h, row['id']))
+            else:
+                conn.execute("INSERT INTO users(name, password_hash) VALUES('me', ?)", (h,))
+            conn.commit()
+        llmconfig.migrate_and_seed(conn)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    _init_and_seed()
+    yield
+
+
+app = FastAPI(title='cs408', lifespan=lifespan)
+
+
+@app.exception_handler(HTTPException)
+async def _http_exc(request, exc: HTTPException):
+    return JSONResponse({'error': exc.detail}, status_code=exc.status_code)
+
+
+app.include_router(router)
+app.mount('/drafts', StaticFiles(directory=str(DRAFTS_DIR)), name='drafts')

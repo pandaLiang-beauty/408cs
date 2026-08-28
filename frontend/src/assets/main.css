@@ -1,0 +1,54 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Element Plus 主题色跟随试卷朱红 */
+:root {
+  --el-color-primary: #b04a2f;
+}
+
+html, body, #app { height: 100%; }
+body {
+  margin: 0;
+  background: #e7e4dd;
+  color: #1c1a17;
+  font-family: 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', system-ui, sans-serif;
+}
+
+.el-button--primary {
+  --el-button-hover-bg-color: #c65a3d;
+  --el-button-hover-border-color: #c65a3d;
+  --el-button-active-bg-color: #9a3f28;
+}
+
+/* 试卷正文：中文宋体、英文/数字 Times New Roman（新罗马）。Times 无中文字形→自动回退到宋体。 */
+.qhtml { font-family: "Times New Roman", Times, "SimSun", "Songti SC", "STSong", "宋体", serif; }
+
+/* 题干/选项里渲染出的 code、公式、表格的基础观感 */
+.qhtml code {
+  background: #f3f0ea;
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-size: 0.92em;
+}
+.qhtml pre {
+  background: #f6f4ef;
+  border: 1px solid #ddd7cc;
+  border-radius: 6px;
+  padding: 10px 12px;
+  overflow: auto;
+  font-size: 13px;
+  line-height: 1.5;
+  margin: 8px 0;
+}
+.qhtml img,
+.qhtml svg { max-width: 100%; height: auto; }        /* 大题里的图是内联 SVG(如 09 年数据通路/网络拓扑)，缩放到卷面宽度，别溢出 */
+/* csgraduates 的图带 <div class=svg-container style=width:120%> 会撑破卷面(溢到灰底)。强制归位到卷宽，超宽则内部横向滚动。 */
+.qhtml .svg-wrapper { max-width: 100%; overflow-x: auto; }
+.qhtml .svg-container { width: 100% !important; max-width: 100%; }
+/* 兜底：万一再混入抓取的页面骨架(页脚/侧栏/悬浮工具条)，直接隐藏，别显示也别撑版 */
+.qhtml footer, .qhtml aside, .qhtml nav,
+.qhtml .fab-container, .qhtml .td-footer, .qhtml #fab-container { display: none !important; }
+.qhtml table { border-collapse: collapse; margin: 10px 0; }
+.qhtml th, .qhtml td { border: 1px solid #c9c3b6; padding: 4px 10px; text-align: left; }
+.qhtml thead th { background: #f3f0ea; }
