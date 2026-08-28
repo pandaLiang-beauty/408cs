@@ -7,7 +7,7 @@
   >
     <div v-if="store.draftQid" class="flex flex-col items-center gap-3">
       <p class="self-start text-[13px] text-muted">
-        用手机扫下面的二维码拍照上传（手机需与电脑在同一 WiFi）。链接一次有效、{{ ttl }} 分钟过期。
+        用手机扫下面的二维码拍照上传（{{ reachHint }}）。链接一次有效、{{ ttl }} 分钟过期。
       </p>
 
       <img v-if="qrDataUrl" :src="qrDataUrl" alt="二维码" class="h-[220px] w-[220px] rounded border border-line" />
@@ -32,7 +32,7 @@
 </template>
 
 <script setup>
-import { ref, watch, onUnmounted } from 'vue'
+import { ref, watch, onUnmounted, computed } from 'vue'
 import QRCode from 'qrcode'
 import { ElMessage } from 'element-plus'
 import { usePaperStore } from '@/stores/paper'
@@ -46,6 +46,15 @@ const ttl = ref(10)
 const err = ref('')
 const draftUrl = ref('')
 let timer = null
+
+// 二维码地址由后端的 STUDY_PUBLIC_BASE 决定：配了公网域名就走公网（手机用流量也行），
+// 没配则回落到局域网 IP（那时手机必须和电脑同网）。提示语据此变化，避免写死误导。
+const isLanUrl = computed(() =>
+  /^https?:\/\/(localhost|127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(url.value || ''),
+)
+const reachHint = computed(() =>
+  isLanUrl.value ? '手机需与电脑连同一局域网' : '手机用流量也能传，不必同一 WiFi',
+)
 
 function stop() {
   clearInterval(timer)
