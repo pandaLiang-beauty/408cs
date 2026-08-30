@@ -1,26 +1,23 @@
-# cs408 忽略清单
+# 408cs 忽略清单
+#
+# 口径（2026-08-30 改定）：这个仓库要在服务器与 Windows 之间做全量同步，
+# 所以**数据一律入库**——study.db、题库原始 HTML、草稿、.env.local 都提交。
+# 只排除两类东西：跨平台不可用的产物，和纯运行期噪声。
 
-# 本地环境变量（含密钥），仅保留 .env.example
-.env.local
+# 跨平台不可用（内含 Linux 绝对路径 / 平台专用二进制，两端各自重建）
+backend/.venv/
+.venv/
+frontend/node_modules/
 
-# Python
+# 字节码
 **/__pycache__/
 *.pyc
-backend/.venv/
 
-# 运行期数据（题库原始 HTML / 草稿 / SQLite 库与 WAL 边车文件）
-# study.db 内含在线配置的大模型密钥与密码哈希，绝不入库
-backend/data/*.db
-backend/data/raw/
-backend/data/raw_sim/
-backend/data/drafts/
+# 运行期噪声
+*.log
+*.pid
+
+# SQLite 边车文件：提交前用 PRAGMA wal_checkpoint(TRUNCATE) 折进 study.db，
+# 这两个文件本身是瞬时状态，入库反而会导致两端打开数据库时冲突。
 backend/data/*.db-wal
 backend/data/*.db-shm
-
-# 前端
-frontend/node_modules/
-frontend/dist/
-
-# 日志与运行期 pid
-*.log
-server.pid

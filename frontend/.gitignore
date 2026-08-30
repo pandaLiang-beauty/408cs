@@ -1,4 +1,7 @@
 node_modules
-dist
 *.log
 .DS_Store
+
+# dist 不再忽略：仓库要在服务器与 Windows 之间全量同步，
+# 且后端 app/main.py 直接托管 dist，入库后换机不必先 npm install 再 build。
+# 忽略清单的总口径见项目根目录 .gitignore。
