@@ -1,8 +1,14 @@
 # 408cs 忽略清单
 #
-# 口径（2026-08-30 改定）：这个仓库要在服务器与 Windows 之间做全量同步，
-# 所以**数据一律入库**——study.db、题库原始 HTML、草稿、.env.local 都提交。
-# 只排除两类东西：跨平台不可用的产物，和纯运行期噪声。
+# 口径（2026-08-30 二次改定）：全量同步阶段已结束。仓库里已入库的那份
+# study.db + 题库 HTML + 草稿快照原样保留（这样 clone 下来就是个能跑的完整项目），
+# 但**此后新产生的数据不再入库**——见文件末尾的忽略段。
+#
+# study.db 已被 git 追踪，写 .gitignore 对它无效（.gitignore 只管未追踪文件），
+# 改用 skip-worktree 屏蔽它的后续变更：
+#     git update-index --skip-worktree backend/data/study.db
+# 恢复追踪用 --no-skip-worktree。注意这标记存在本机 .git/index 里、不随仓库
+# 分发，换机器 clone 后需要重新设一次。
 
 # 跨平台不可用（内含 Linux 绝对路径 / 平台专用二进制，两端各自重建）
 backend/.venv/
@@ -21,3 +27,9 @@ frontend/node_modules/
 # 这两个文件本身是瞬时状态，入库反而会导致两端打开数据库时冲突。
 backend/data/*.db-wal
 backend/data/*.db-shm
+
+# 此后新增的学习数据不再入库。已入库的旧文件不受这里影响（.gitignore 不作用于
+# 已追踪文件），仓库里那份快照照旧在；这几条只挡住之后新抓的题料和新写的草稿。
+backend/data/raw/
+backend/data/raw_sim/
+backend/data/drafts/
