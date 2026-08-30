@@ -10,4 +10,4 @@ _更新于 2026-08-28_
 
 ## 边界提示
 
-- 本仓库为独立 cs408，勿从 `/root/english`、`/root/math`、`pro-study-platform` 或 `_reference` 引入代码或数据。
+- 本仓库为独立 cs408，勿从 `/root/sysStuByAI/204english`、`/root/sysStuByAI/302math`、`pro-study-platform` 或 `_reference` 引入代码或数据。

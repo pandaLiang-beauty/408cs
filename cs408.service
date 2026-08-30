@@ -1,5 +1,5 @@
 # cs408 后端 systemd unit。
-# 默认部署路径 /root/cs408；deploy.sh 会按实际 STUDY_PROJECT_ROOT / STUDY_PORT 改写路径与端口后安装到
+# 默认部署路径 /root/sysStuByAI/408cs；deploy.sh 会按实际 STUDY_PROJECT_ROOT / STUDY_PORT 改写路径与端口后安装到
 # /etc/systemd/system/cs408.service。手动安装可直接 cp 到该位置并 systemctl daemon-reload。
 [Unit]
 Description=CS408 Kaoyan Practice Backend
@@ -7,12 +7,12 @@ After=network.target
 
 [Service]
 Type=simple
-WorkingDirectory=/root/cs408/backend
-EnvironmentFile=-/root/cs408/.env.local
+WorkingDirectory=/root/sysStuByAI/408cs/backend
+EnvironmentFile=-/root/sysStuByAI/408cs/.env.local
 Environment=PYTHONUNBUFFERED=1
 Environment=STUDY_BACKEND_HOST=127.0.0.1
 Environment=STUDY_PORT=8408
-ExecStart=/root/cs408/backend/.venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 8408
+ExecStart=/root/sysStuByAI/408cs/backend/.venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 8408
 Restart=always
 RestartSec=3
 

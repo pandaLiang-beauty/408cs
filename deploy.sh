@@ -53,7 +53,7 @@ npm ci
 npm run build
 
 # 4) 以仓库内 cs408.service 为模板安装 systemd unit（按实际根目录 / 端口改写）。
-sed -e "s#/root/cs408#$ROOT_DIR#g" \
+sed -e "s#/root/sysStuByAI/408cs#$ROOT_DIR#g" \
     -e "s#--port 8408#--port $BACKEND_PORT#g" \
     -e "s#STUDY_PORT=8408#STUDY_PORT=$BACKEND_PORT#g" \
     "$ROOT_DIR/cs408.service" > "$SERVICE_PATH"
