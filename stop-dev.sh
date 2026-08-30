@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 停止开发用的后端(uvicorn :8408) 与前端(vite :3000)。
+# 停止开发用的后端(uvicorn :8408) 与前端(vite :5408)。
 # 不用 set -e：允许部分目标本就未运行。兼容 Windows Git Bash 与 Linux/macOS。
 set -uo pipefail
 
@@ -14,7 +14,7 @@ if [[ -f "$ROOT_DIR/.env.local" ]]; then
 fi
 
 BACKEND_PORT="${STUDY_PORT:-8408}"
-FRONTEND_PORT="${STUDY_FRONTEND_PORT:-3000}"
+FRONTEND_PORT="${STUDY_FRONTEND_PORT:-5408}"
 
 kill_pid() {
   local pid="$1"

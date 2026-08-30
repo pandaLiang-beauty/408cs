@@ -5,7 +5,7 @@
 ## 技术栈
 
 - 后端：FastAPI + Uvicorn（`127.0.0.1:8408`）
-- 前端：Vue 3 + Vite（开发 `127.0.0.1:3000`）
+- 前端：Vue 3 + Vite（开发 `127.0.0.1:5408`）
 - 数据库：SQLite（`backend/data/study.db`）
 - 批改：vyceai `gpt-5.6-luna`（OpenAI 兼容接口）
 
@@ -22,10 +22,10 @@ bash check-env.sh
 ## 运行（开发）
 
 ```bash
-bash start-dev.sh   # 后台启动后端(:8408 --reload) 与前端(:3000)
+bash start-dev.sh   # 后台启动后端(:8408 --reload) 与前端(:5408)
 ```
 
-打开 `http://127.0.0.1:3000/`。停止：
+打开 `http://127.0.0.1:5408/`。停止：
 
 ```bash
 bash stop-dev.sh
