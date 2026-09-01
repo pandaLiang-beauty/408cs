@@ -6,7 +6,7 @@
         type="button"
         class="tri"
         :class="{ 'tri-on': answer.fuzzy }"
-        :disabled="graded"
+        :disabled="editingDisabled"
         :title="answer.fuzzy ? '已标模糊（点此取消）' : '标记模糊（拿不准）'"
         @click="store.toggleFuzzy(question.id)"
       >{{ answer.fuzzy ? '▲' : '△' }}</button>
@@ -40,6 +40,7 @@
         type="button"
         class="flex items-start gap-2.5 rounded-lg border px-3 py-2 text-left transition font-song"
         :class="optClass(o.key)"
+        :disabled="editingDisabled"
         @click="store.setChosen(question.id, o.key)"
       >
         <span class="min-w-[18px] font-bold">{{ o.key }}</span>
@@ -65,6 +66,7 @@ const store = usePaperStore()
 
 const mode = computed(() => store.mode)
 const graded = computed(() => store.graded)
+const editingDisabled = computed(() => store.graded || store.grading)
 const answer = computed(() => store.answers[props.question.id] || { chosen: '', fuzzy: false })
 const result = computed(() => store.results[props.question.id])
 const hasDraft = computed(() => !!store.items?.[props.question.id]?.draft_url)
@@ -78,7 +80,9 @@ function optClass(k) {
   if (!graded.value) {
     return answer.value.chosen === k
       ? 'border-primary bg-primary-soft'
-      : 'border-line bg-white hover:border-primary hover:bg-primary-soft'
+      : editingDisabled.value
+        ? 'cursor-not-allowed border-line bg-white opacity-70'
+        : 'border-line bg-white hover:border-primary hover:bg-primary-soft'
   }
   const r = result.value
   if (!r) return 'border-line bg-white'
@@ -117,4 +121,3 @@ const badgeClass = computed(() => {
 .badge-bad { background: #f7e3e2; color: #c23b3b; }
 .badge-fuzzy { background: #f6ecd7; color: #b8791d; }
 </style>
-

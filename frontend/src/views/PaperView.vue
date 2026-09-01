@@ -49,9 +49,16 @@
       </div>
 
       <div class="mx-auto mt-4 flex max-w-[820px] items-center justify-between">
-        <span class="text-sm text-muted">{{ statusText }}</span>
+        <div class="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm">
+          <span class="text-muted">{{ statusText }}</span>
+          <span v-if="store.savingAnswerCount" class="text-muted">正在保存…</span>
+          <template v-if="store.saveError">
+            <span class="text-bad">答题保存失败：{{ store.saveError }}</span>
+            <el-button size="small" :loading="retryingSaves" @click="retryPendingSaves">重试保存</el-button>
+          </template>
+        </div>
         <div class="flex gap-2">
-          <el-button v-if="!store.graded" type="primary" size="large" :loading="submitting" @click="onSubmit">
+          <el-button v-if="!store.graded" type="primary" size="large" :loading="store.grading" @click="onSubmit">
             交卷
           </el-button>
           <template v-else>
@@ -68,8 +75,8 @@
 </template>
 
 <script setup>
-import { computed, onMounted, ref, watch } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { usePaperStore } from '@/stores/paper'
 import QuestionCard from '@/components/QuestionCard.vue'
@@ -80,8 +87,8 @@ import NoteDrawer from '@/components/NoteDrawer.vue'
 const route = useRoute()
 const router = useRouter()
 const store = usePaperStore()
-const submitting = ref(false)
 const page = ref(1)
+const retryingSaves = ref(false)
 
 const CHOICE_PER_PAGE = 10   // 真题卷：每页 10 道单选
 const SUBJ_PER_PAGE = 2      // 综合大题篇幅长，每页 2 道
@@ -111,6 +118,36 @@ async function load() {
 }
 onMounted(load)
 watch(() => route.fullPath, load)
+
+function errorMessage(error, fallback) {
+  return error?.response?.data?.error || error?.message || fallback
+}
+
+async function flushBeforeNavigation() {
+  try {
+    await store.flushAll()
+    return true
+  } catch (error) {
+    ElMessage.error(`答题尚未保存，已取消跳转：${errorMessage(error, '请检查网络后重试')}`)
+    return false
+  }
+}
+
+// route.query 改变时当前组件不会卸载；两种守卫都必须有，才能覆盖所有切卷路径。
+onBeforeRouteLeave(flushBeforeNavigation)
+onBeforeRouteUpdate(flushBeforeNavigation)
+
+function beforeUnload(event) {
+  if (!store.hasPendingChanges()) return
+  event.preventDefault()
+  event.returnValue = ''
+}
+
+onMounted(() => window.addEventListener('beforeunload', beforeUnload))
+onBeforeUnmount(() => {
+  window.removeEventListener('beforeunload', beforeUnload)
+  void store.flushAll().catch(() => {})
+})
 
 // 真题卷按正常试卷组织并分页：单选连续为一节、综合大题为一节；强化卷保持单页连续流。
 const pages = computed(() => {
@@ -160,15 +197,24 @@ const paperMeta = computed(() => {
 })
 
 async function onSubmit() {
-  submitting.value = true
   try {
     await store.grade()
     page.value = 1
     window.scrollTo(0, 0)
-  } catch {
-    ElMessage.error('交卷失败，请检查后端是否运行')
+  } catch (error) {
+    ElMessage.error(`交卷失败：${errorMessage(error, '请检查网络后重试')}`)
+  }
+}
+
+async function retryPendingSaves() {
+  retryingSaves.value = true
+  try {
+    await store.retryPendingSaves()
+    ElMessage.success('答题已保存')
+  } catch (error) {
+    ElMessage.error(`保存仍未完成：${errorMessage(error, '请检查网络后重试')}`)
   } finally {
-    submitting.value = false
+    retryingSaves.value = false
   }
 }
 

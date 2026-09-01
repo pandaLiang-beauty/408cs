@@ -6,7 +6,7 @@
 
 - Python 3.9+、Node.js 18+/npm。
 - 复制并填写环境变量：`cp .env.example .env.local`，至少设置 `STUDY_INITIAL_PASSWORD` 与 `GRADE_API_KEY`。
-- **公网部署必须设 `STUDY_PUBLIC_BASE`**（如 `https://cs408.ncnb.me`）。留空时后端会自动探测本机地址写进草稿纸二维码，在云主机上会探测成内网地址（如 `10.x`），手机扫了打不开。
+- **公网部署必须设 `STUDY_PUBLIC_BASE`**（如 `https://408.xpliang.tech`）。留空时后端会自动探测本机地址写进草稿纸二维码，在云主机上会探测成内网地址（如 `10.x`），手机扫了打不开。
 - 校验环境：`bash check-env.sh`。
 
 ## 一键部署
@@ -35,32 +35,34 @@ journalctl -u cs408.service -f
 systemctl restart cs408.service
 ```
 
-## 现网部署（193.112.97.187 · Cloudflare Tunnel）
+## Cloudflare Tunnel：选择一种入口模式
 
-实际线上环境与上面的 `deploy.sh` 有两点不同，按这套走：
+当前公网域名为 `https://408.xpliang.tech`。开发预览与生产部署的 Tunnel 指向不同端口，**只能按实际运行模式选择其一，不能混用**。
 
-| | 值 |
-|---|---|
-| 域名 | `https://cs408.ncnb.me`（Cloudflare Tunnel，面板配 ingress → `http://127.0.0.1:8104`） |
-| 服务 | `cs408v2.service`，监听 `127.0.0.1:8104` |
-| 代码 | 裸仓库 `/root/git/cs408v2.git` → 工作目录 `/root/cs408-v2` |
-| 解释器 | 系统只有 Python 3.9.12，**代码须保持 3.9 兼容**（不可用 `str | None` 这类 PEP 604 写法） |
+| 模式 | 本机进程 | Cloudflare Tunnel ingress | 适用场景 |
+|---|---|---|---|
+| 开发 / 临时预览 | Vite `127.0.0.1:5408`，并代理 API 到后端 `127.0.0.1:8408` | `http://127.0.0.1:5408` | 运行 `bash start-dev.sh`，需要热更新 |
+| 构建后单端口 | Uvicorn `127.0.0.1:8408`，直接托管 `frontend/dist` | `http://127.0.0.1:8408` | systemd 稳定运行 |
 
-两条硬约束：
-
-- **前端在本地构建**，只上传 `frontend/dist`。服务器仅约 1.3G 可用内存，在上面跑 `npm run build` 有 OOM 风险，因此**不要在现网执行 `deploy.sh`**（它会构建前端）。
-- 隧道只暴露一个端口，故前端由后端托管（见 `app/main.py` 末尾的 SPA 回落），不经 nginx 或 `study-entry` 网关。
-
-更新流程：
+开发模式：
 
 ```bash
-# 本地
-npm --prefix frontend run build
-git commit -am "..." && git bundle create /tmp/cs408v2.bundle --all
-# 上传 bundle 与 dist 后，在服务器执行
-git --git-dir=/root/git/cs408v2.git fetch /tmp/cs408v2.bundle master:master
-git --git-dir=/root/git/cs408v2.git --work-tree=/root/cs408-v2 checkout -f master
-systemctl restart cs408v2
+STUDY_PUBLIC_ORIGIN=https://408.xpliang.tech bash start-dev.sh
 ```
 
-`/root/sysStuByAI/408cs`、`/root/sysStuByAI/204english`、`/root/sysStuByAI/302math` 与 `pro-study-platform-*` 服务属于旧系统，部署时不要触碰。
+`start-dev.sh` 会配置 Vite 接受该 Tunnel Host，并让 `/api`、`/drafts`、`/u` 转发给 `8408`。开发预览时若 Tunnel 指向 `8408`，会绕过 Vite（只会得到旧的构建产物或 404）；构建后单端口运行时若 Tunnel 仍指向 `5408`，则会出现 Cloudflare 502。
+
+构建后单端口模式：
+
+```bash
+cd frontend && npm run build
+systemctl restart cs408.service
+```
+
+FastAPI 在检测到 `frontend/dist` 后会提供 SPA 静态文件和 history 路由回落；此时 Tunnel 必须指向 `8408`。公网二维码还需在 `.env.local` 设置：
+
+```bash
+STUDY_PUBLIC_BASE=https://408.xpliang.tech
+```
+
+此前文档中的 `cs408.ncnb.me`、`8104`、`cs408v2.service` 与 `/root/cs408-v2` 均为历史环境记录，不适用于本仓库，不能作为部署命令执行。

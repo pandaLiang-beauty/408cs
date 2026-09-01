@@ -161,6 +161,7 @@ CREATE TABLE IF NOT EXISTS daily_tasks (
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_task_date ON daily_tasks(plan_date, status);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_task_plan_date_unique ON daily_tasks(plan_date);
 """
 
 
@@ -172,6 +173,9 @@ def initialize(conn) -> None:
 
 def _pre_migrate(conn) -> None:
     """轻量迁移：给已存在的表补齐新增列（老库不会因 CREATE IF NOT EXISTS 得到新列）。"""
+    # 旧版本没有日期唯一约束；并发加载首页时可能留下同一天的重复任务。
+    # 只删除重复的排程关联，不会级联删除其绑定的做题记录。
+    dedupe_daily_tasks(conn)
     has_q = conn.execute(
         "SELECT 1 FROM sqlite_master WHERE type='table' AND name='questions'").fetchone()
     if not has_q:
@@ -185,3 +189,30 @@ def _pre_migrate(conn) -> None:
         lcols = {r[1] for r in conn.execute('PRAGMA table_info(llm_config)')}
         if 'grade_prompt' not in lcols:
             conn.execute("ALTER TABLE llm_config ADD COLUMN grade_prompt TEXT NOT NULL DEFAULT ''")
+
+
+def dedupe_daily_tasks(conn) -> int:
+    """每个自然日只保留一项排程，返回移除的重复关联数。
+
+    同一天意外生成多条任务时，优先保留已绑定 session 的任务，其次保留已完成任务；
+    被移除的 task 不会级联删除任何做题记录。
+    """
+    exists = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='daily_tasks'").fetchone()
+    if not exists:
+        return 0
+
+    dates = conn.execute(
+        'SELECT plan_date FROM daily_tasks GROUP BY plan_date HAVING COUNT(*) > 1').fetchall()
+    removed = 0
+    for row in dates:
+        tasks = conn.execute(
+            "SELECT id FROM daily_tasks WHERE plan_date=? "
+            "ORDER BY CASE WHEN session_id IS NULL THEN 1 ELSE 0 END, "
+            "CASE WHEN status='done' THEN 0 ELSE 1 END, id",
+            (row['plan_date'],),
+        ).fetchall()
+        for task in tasks[1:]:
+            conn.execute('DELETE FROM daily_tasks WHERE id=?', (task['id'],))
+            removed += 1
+    return removed

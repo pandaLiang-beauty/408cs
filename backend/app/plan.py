@@ -4,12 +4,14 @@
 - 一天套卷、一天强化，交替推进。
 - 真题从旧到新精做（2009→2023），近三年（2024/2025/2026）留到考前当模考。
 - 没做完不清零：过期未完成的任务一直挂着显示为「补做」。
-- 自适应：欠账 ≥2 个时，新的一天只排强化，不再压新卷。
+- 未完成当前任务时，不生成下一项；完成后才推进到强化或下一套真题。
 
-只把「到今天为止」的任务落库；往后 7 天是按当前进度算出来的预排（不落库，会自动自我校正）。
+只把当天任务落库；未来只预排下一项待做任务，避免把尚未完成的真题误显示为后续强化。
 """
 from datetime import date, datetime, timedelta
 from typing import Optional
+
+from .schema import dedupe_daily_tasks
 
 WEEKDAYS = ['周一', '周二', '周三', '周四', '周五', '周六', '周日']
 
@@ -55,9 +57,9 @@ def _used_years(conn):
 
 
 def _decide(conn, cfg, day: str, prev_kind: str, overdue: int, used: set):
-    """给某一天决定任务：返回 (kind, ref_year)。"""
-    if overdue >= 2:
-        return ('reinforce', None)
+    """给某一天决定任务；存在未完成旧任务时不生成下一项。"""
+    if overdue:
+        return None
     if prev_kind in ('exam', 'mock'):
         return ('reinforce', None)          # 套卷次日必为强化
     main, mocks = _pools(conn, cfg)
@@ -84,21 +86,37 @@ def _overdue_rows(conn, day: str):
                         ' ORDER BY plan_date', (day,)).fetchall()
 
 
+def _remove_premature_reinforcements(conn) -> int:
+    """清掉旧版在未完成真题后自动排出的、尚未开始的强化任务。"""
+    cur = conn.execute(
+        "DELETE FROM daily_tasks "
+        "WHERE kind='reinforce' AND status='todo' AND session_id IS NULL "
+        "AND EXISTS ("
+        "  SELECT 1 FROM daily_tasks earlier "
+        "  WHERE earlier.plan_date < daily_tasks.plan_date "
+        "    AND earlier.kind IN ('exam', 'mock') AND earlier.status='todo'"
+        ")"
+    )
+    return cur.rowcount
+
+
 def ensure_through_today(conn) -> dict:
-    """把 start_date..今天 之间缺失的日子补齐落库（每天一项）。"""
+    """确保今天至多一项任务；未完成时不按漏掉的日期回填后续任务。"""
     cfg = ensure_config(conn)
-    cur, end = _d(cfg['start_date']), _d(today_str())
-    if cur > end:
-        cur = end
-    while cur <= end:
-        day = cur.isoformat()
-        if not conn.execute('SELECT 1 FROM daily_tasks WHERE plan_date=?', (day,)).fetchone():
-            used = _used_years(conn)
-            overdue = len(_overdue_rows(conn, day))
-            kind, year = _decide(conn, cfg, day, _prev_kind(conn, day), overdue, used)
-            conn.execute('INSERT INTO daily_tasks(plan_date, kind, ref_year) VALUES(?,?,?)',
+    refresh_status(conn)
+    dedupe_daily_tasks(conn)
+    _remove_premature_reinforcements(conn)
+
+    day = today_str()
+    current = conn.execute('SELECT 1 FROM daily_tasks WHERE plan_date=?', (day,)).fetchone()
+    overdue = len(_overdue_rows(conn, day))
+    if not current and not overdue:
+        used = _used_years(conn)
+        decision = _decide(conn, cfg, day, _prev_kind(conn, day), overdue, used)
+        if decision:
+            kind, year = decision
+            conn.execute('INSERT OR IGNORE INTO daily_tasks(plan_date, kind, ref_year) VALUES(?,?,?)',
                          (day, kind, year))
-        cur += timedelta(days=1)
     conn.commit()
     return cfg
 
@@ -168,21 +186,18 @@ def _last_materialized_kind(conn) -> str:
 
 
 def simulate_range(conn, cfg, from_d: date, to_d: date) -> list:
-    """推算 [from_d, to_d] 每天的任务（不落库）。按当前进度往前滚，会自我校正。"""
+    """预排下一项待做任务（不落库）；当前任务完成后才推算后续。"""
+    if from_d > to_d or _overdue_rows(conn, from_d.isoformat()):
+        return []
     used = set(_used_years(conn))
     prev_kind = _last_materialized_kind(conn)
-    overdue = len(_overdue_rows(conn, today_str()))
-    out, d = [], from_d
-    while d <= to_d:
-        s = d.isoformat()
-        kind, year = _decide(conn, cfg, s, prev_kind, overdue, used)
-        if year:
-            used.add(year)
-        out.append({'date': s, 'weekday': weekday_cn(s), 'kind': kind, 'ref_year': year,
-                    **describe(conn, kind, year)})
-        prev_kind = kind
-        d += timedelta(days=1)
-    return out
+    day = from_d.isoformat()
+    decision = _decide(conn, cfg, day, prev_kind, 0, used)
+    if not decision:
+        return []
+    kind, year = decision
+    return [{'date': day, 'weekday': weekday_cn(day), 'kind': kind, 'ref_year': year,
+             **describe(conn, kind, year)}]
 
 
 def upcoming(conn, cfg, days: int = 7) -> list:

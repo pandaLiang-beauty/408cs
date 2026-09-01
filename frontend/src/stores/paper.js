@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import * as quiz from '@/api/cs408/quiz'
+import { createAnswerSaveQueue } from './answerSaveQueue'
 
 // 一场做题（session）的完整状态与操作。答题即自动保存到后端，刷新可恢复。
 export const usePaperStore = defineStore('paper', () => {
@@ -13,13 +14,17 @@ export const usePaperStore = defineStore('paper', () => {
   const items = ref({}) // qid -> 后端做题记录（含 draft_url / 大题批改 / 交卷后正确答案）
   const graded = ref(false)
   const loading = ref(false)
+  const grading = ref(false)
   const summary = ref(null) // { total, correct, wrong, fuzzy }
+  const savingAnswerCount = ref(0)
+  const saveErrors = ref({}) // sessionId:questionId -> message
 
   // 交卷后的展示数据直接复用 items（其中含 answer / is_correct / result）
   const results = computed(() => items.value)
   const answeredCount = computed(
     () => Object.values(answers.value).filter((a) => a.chosen).length,
   )
+  const saveError = computed(() => Object.values(saveErrors.value)[0] || '')
 
   function _title(kind, y) {
     return kind === 'exam' ? `${y} 年 408 真题` : '强化训练卷'
@@ -39,6 +44,19 @@ export const usePaperStore = defineStore('paper', () => {
       a[q.id] = { chosen: it?.chosen || '', fuzzy: !!it?.fuzzy }
     })
     answers.value = a
+    if (graded.value) {
+      const choiceItems = payload.questions.filter((q) => q.qtype === 'choice')
+      const correct = choiceItems.filter((q) => items.value[q.id]?.is_correct).length
+      const fuzzy = choiceItems.filter((q) => items.value[q.id]?.fuzzy).length
+      summary.value = {
+        total: choiceItems.length,
+        correct,
+        wrong: choiceItems.length - correct,
+        fuzzy,
+      }
+    } else {
+      summary.value = null
+    }
   }
 
   async function loadSession(sid) {
@@ -61,39 +79,71 @@ export const usePaperStore = defineStore('paper', () => {
     }
   }
 
-  // ---- 自动保存：离散动作（选项/模糊）改动即立即保存，避免"点完马上刷新"丢失 ----
-  const _inflight = {} // qid -> 最近一次保存的 Promise
+  // ---- 自动保存：同一题的请求严格串行，避免慢请求覆盖后一次选择 ----
+  const answerSaveQueue = createAnswerSaveQueue({
+    save: ({ sessionId: savedSessionId, questionId, payload }) =>
+      quiz.patchItem(savedSessionId, questionId, payload),
+    onStateChange: ({ pending, active }) => {
+      savingAnswerCount.value = pending + active
+    },
+    onError: (error, entry) => {
+      const message = error?.response?.data?.error || error?.message || '答题保存失败，请重试'
+      saveErrors.value = { ...saveErrors.value, [entry.key]: message }
+    },
+    onSuccess: (entry) => {
+      if (!(entry.key in saveErrors.value)) return
+      const next = { ...saveErrors.value }
+      delete next[entry.key]
+      saveErrors.value = next
+    },
+  })
+
   function _save(qid) {
     const a = answers.value[qid]
-    if (!sessionId.value || !a) return
-    const p = quiz
-      .patchItem(sessionId.value, qid, { chosen: a.chosen, fuzzy: a.fuzzy })
-      .catch(() => {}) // 失败静默：下次改动会重发
-    _inflight[qid] = p
-    return p
+    if (!sessionId.value || !a) return Promise.resolve(false)
+    // 入队时即冻结快照与会话，不能等到请求执行时再读响应式状态。
+    return answerSaveQueue.enqueue({
+      sessionId: sessionId.value,
+      questionId: qid,
+      payload: { chosen: a.chosen, fuzzy: a.fuzzy },
+    })
   }
+
   async function flushAll() {
-    await Promise.all(Object.values(_inflight))
+    await answerSaveQueue.flushAll()
+  }
+
+  async function retryPendingSaves() {
+    await answerSaveQueue.flushAll()
+  }
+
+  function hasPendingChanges() {
+    return answerSaveQueue.hasPendingChanges()
   }
 
   function setChosen(qid, key) {
-    if (graded.value || !answers.value[qid]) return
+    if (graded.value || grading.value || !answers.value[qid]) return
     answers.value[qid].chosen = key
-    _save(qid)
+    void _save(qid)
   }
 
   function toggleFuzzy(qid) {
-    if (graded.value || !answers.value[qid]) return
+    if (graded.value || grading.value || !answers.value[qid]) return
     answers.value[qid].fuzzy = !answers.value[qid].fuzzy
-    _save(qid)
+    void _save(qid)
   }
 
   async function grade() {
-    if (graded.value || !sessionId.value) return
-    await flushAll()
-    const res = await quiz.submitSession(sessionId.value)
-    _apply(res)
-    summary.value = { total: res.total, correct: res.correct, wrong: res.wrong, fuzzy: res.fuzzy }
+    if (graded.value || grading.value || !sessionId.value) return
+    grading.value = true
+    try {
+      await flushAll()
+      const res = await quiz.submitSession(sessionId.value)
+      _apply(res)
+      summary.value = { total: res.total, correct: res.correct, wrong: res.wrong, fuzzy: res.fuzzy }
+    } finally {
+      grading.value = false
+    }
   }
 
   // 组件回写：大题批改结果 / 草稿地址 更新到 items
@@ -108,9 +158,10 @@ export const usePaperStore = defineStore('paper', () => {
   const openNote = (qid) => (noteQid.value = qid)
 
   return {
-    sessionId, mode, year, title, questions, answers, items, graded, loading, summary,
-    results, answeredCount, draftQid, noteQid,
-    loadSession, startSession, setChosen, toggleFuzzy, grade, flushAll, patchLocalItem,
+    sessionId, mode, year, title, questions, answers, items, graded, loading, grading, summary,
+    savingAnswerCount, saveError, results, answeredCount, draftQid, noteQid,
+    loadSession, startSession, setChosen, toggleFuzzy, grade, flushAll, retryPendingSaves,
+    hasPendingChanges, patchLocalItem,
     openDraft, openNote,
   }
 })
