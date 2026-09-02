@@ -1,4 +1,4 @@
-"""学习排程：只安排「天」，不排钟点。
+"""学习排程：按北京时间 08:00 切换学习日。
 
 规则（用户拍板）：
 - 一天套卷、一天强化，交替推进。
@@ -6,18 +6,36 @@
 - 没做完不清零：过期未完成的任务一直挂着显示为「补做」。
 - 未完成当前任务时，不生成下一项；完成后才推进到强化或下一套真题。
 
-只把当天任务落库；未来只预排下一项待做任务，避免把尚未完成的真题误显示为后续强化。
+任务在所属学习日的次日 08:00 前有效；未来只预排下一项待做任务，避免把尚未完成的真题误显示为后续强化。
 """
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time, timedelta, timezone
 from typing import Optional
+from zoneinfo import ZoneInfo
 
 from .schema import dedupe_daily_tasks
 
 WEEKDAYS = ['周一', '周二', '周三', '周四', '周五', '周六', '周日']
+BEIJING_TZ = ZoneInfo('Asia/Shanghai')
+STUDY_DAY_BOUNDARY_HOUR = 8
 
 
-def today_str() -> str:
-    return datetime.now().strftime('%Y-%m-%d')
+def today_str(now: datetime | None = None) -> str:
+    """当前学习日：北京时间次日 08:00 前仍归属前一天的任务。"""
+    current = now or datetime.now(timezone.utc)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=timezone.utc)
+    local = current.astimezone(BEIJING_TZ)
+    if local.hour < STUDY_DAY_BOUNDARY_HOUR:
+        return (local.date() - timedelta(days=1)).isoformat()
+    return local.date().isoformat()
+
+
+def calendar_today_str(now: datetime | None = None) -> str:
+    """真实北京时间日期，供倒计时、页头与日历高亮使用。"""
+    current = now or datetime.now(timezone.utc)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=timezone.utc)
+    return current.astimezone(BEIJING_TZ).date().isoformat()
 
 
 def _d(s: str) -> date:
@@ -26,6 +44,28 @@ def _d(s: str) -> date:
 
 def weekday_cn(s: str) -> str:
     return WEEKDAYS[_d(s).weekday()]
+
+
+def task_deadline_at(task_day: str) -> str:
+    """任务结束于所属学习日的次日北京时间 08:00，以 UTC ISO 返回给前端。"""
+    deadline = datetime.combine(
+        _d(task_day) + timedelta(days=1),
+        time(hour=STUDY_DAY_BOUNDARY_HOUR),
+        tzinfo=BEIJING_TZ,
+    )
+    return deadline.astimezone(timezone.utc).isoformat()
+
+
+def next_study_boundary_at(now: datetime | None = None) -> str:
+    """下一个北京时间 08:00 边界，以 UTC ISO 返回，供前端定时刷新。"""
+    current = now or datetime.now(timezone.utc)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=timezone.utc)
+    local = current.astimezone(BEIJING_TZ)
+    boundary = datetime.combine(local.date(), time(hour=STUDY_DAY_BOUNDARY_HOUR), tzinfo=BEIJING_TZ)
+    if local >= boundary:
+        boundary += timedelta(days=1)
+    return boundary.astimezone(timezone.utc).isoformat()
 
 
 def ensure_config(conn) -> dict:
@@ -177,7 +217,7 @@ def task_public(conn, r) -> dict:
     d = describe(conn, r['kind'], r['ref_year'])
     return {'id': r['id'], 'date': r['plan_date'], 'weekday': weekday_cn(r['plan_date']),
             'kind': r['kind'], 'ref_year': r['ref_year'], 'status': r['status'],
-            'session_id': r['session_id'], **d}
+            'session_id': r['session_id'], 'deadline_at': task_deadline_at(r['plan_date']), **d}
 
 
 def _last_materialized_kind(conn) -> str:
@@ -210,8 +250,9 @@ def calendar(conn, ym: Optional[str] = None) -> dict:
     """某个月的排程日历：已过去与今天用落库数据，未来用预排。ym 形如 2026-08。"""
     cfg = ensure_through_today(conn)
     refresh_status(conn)
-    t = today_str()
-    y, m = (int(x) for x in (ym or t[:7]).split('-'))
+    actual_today = calendar_today_str()
+    study_day = today_str()
+    y, m = (int(x) for x in (ym or actual_today[:7]).split('-'))
     first = date(y, m, 1)
     last = date(y + (m == 12), (m % 12) + 1, 1) - timedelta(days=1)
 
@@ -219,15 +260,14 @@ def calendar(conn, ym: Optional[str] = None) -> dict:
     for r in conn.execute('SELECT * FROM daily_tasks WHERE plan_date BETWEEN ? AND ? ORDER BY id',
                           (first.isoformat(), last.isoformat())):
         days[r['plan_date']] = {**task_public(conn, r), 'planned': False}
-    td = _d(t)
-    if last > td:
-        # 必须从今天之后连续推算到本月末再筛选，否则跨月时"已用年份"链会断（会重复排同一年）
-        for e in simulate_range(conn, cfg, td + timedelta(days=1), last):
+    if last >= _d(study_day) + timedelta(days=1):
+        for e in simulate_range(conn, cfg, _d(study_day) + timedelta(days=1), last):
             if first <= _d(e['date']) <= last:
                 days.setdefault(e['date'], {**e, 'status': 'plan', 'planned': True, 'id': None,
                                             'session_id': None})
     return {'month': f'{y:04d}-{m:02d}', 'first_weekday': first.weekday(),
-            'days_in_month': last.day, 'today': t, 'exam_date': cfg['exam_date'],
+            'days_in_month': last.day, 'today': actual_today, 'study_day': study_day,
+            'exam_date': cfg['exam_date'], 'next_study_boundary_at': next_study_boundary_at(),
             'days': [days[k] for k in sorted(days)]}
 
 
@@ -235,16 +275,18 @@ def view(conn) -> dict:
     """首页排程视图：倒计时 + 今日任务 + 补做 + 未来预排 + 进度。"""
     cfg = ensure_through_today(conn)
     refresh_status(conn)
-    t = today_str()
-    today_rows = conn.execute('SELECT * FROM daily_tasks WHERE plan_date=? ORDER BY id', (t,)).fetchall()
-    overdue_rows = _overdue_rows(conn, t)
+    actual_today = calendar_today_str()
+    study_day = today_str()
+    today_rows = conn.execute('SELECT * FROM daily_tasks WHERE plan_date=? ORDER BY id', (study_day,)).fetchall()
+    overdue_rows = _overdue_rows(conn, study_day)
     main, mocks = _pools(conn, cfg)
     done_years = {r['ref_year'] for r in conn.execute(
         "SELECT DISTINCT ref_year FROM daily_tasks WHERE status='done' AND ref_year IS NOT NULL")}
     return {
         'exam_date': cfg['exam_date'],
-        'days_left': (_d(cfg['exam_date']) - _d(t)).days,
-        'today': t, 'weekday': weekday_cn(t),
+        'days_left': (_d(cfg['exam_date']) - _d(actual_today)).days,
+        'today': actual_today, 'weekday': weekday_cn(actual_today), 'study_day': study_day,
+        'next_study_boundary_at': next_study_boundary_at(),
         'tasks': [task_public(conn, r) for r in today_rows],
         'overdue': [task_public(conn, r) for r in overdue_rows],
         'upcoming': upcoming(conn, cfg),

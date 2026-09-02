@@ -54,6 +54,13 @@ venv_python() {
   fi
 }
 
+# 谁在监听这个端口。这台机器没有 ss / lsof / fuser，只有 netstat；
+# netstat -tlnp 的末列是 "pid/程序名"，取出 pid 部分。没人监听就输出空。
+port_pid() {
+  netstat -tlnp 2>/dev/null | awk -v p=":$1\$" '
+    $1 ~ /^tcp/ && $4 ~ p { split($NF, a, "/"); if (a[1] ~ /^[0-9]+$/) { print a[1]; exit } }'
+}
+
 [[ -d "$ROOT_DIR/backend/app" && -d "$ROOT_DIR/frontend/src" ]] || {
   echo "项目结构不完整：$ROOT_DIR (需要 backend/app 与 frontend/src)" >&2
   exit 1
@@ -75,6 +82,12 @@ PY_BIN="$(venv_python)"
 [[ -n "$PY_BIN" ]] || { echo "无法定位虚拟环境 python" >&2; exit 1; }
 
 cd "$ROOT_DIR/backend"
+# 起之前先确认端口是空的，理由同前端：端口被别的进程占着时，下面的 curl 探活
+# 会被那个进程应答，脚本就会误判"启动成功"。
+if [[ -n "$(port_pid "$BACKEND_PORT")" ]]; then
+  echo "端口 $BACKEND_PORT 已被 pid $(port_pid "$BACKEND_PORT") 占用。先跑 bash stop-dev.sh" >&2
+  exit 1
+fi
 # setsid + </dev/null：这台机器没有 systemd，全靠手起，进程必须脱离当前终端的会话，
 # 否则调用方的 shell 一退就被连带杀掉。就绪判断用 curl 探活（--noproxy '*' 是因为
 # /root/.curlrc 里那个代理是坏的），不要用 ss —— 本机没装 ss，只有 netstat。
@@ -82,26 +95,50 @@ setsid "$PY_BIN" -m uvicorn app.main:app --host "$BACKEND_HOST" --port "$BACKEND
   > "$ROOT_DIR/backend/server.log" 2>&1 < /dev/null &
 backend_pid=$!
 for _ in $(seq 1 60); do
+  ps -p "$backend_pid" >/dev/null 2>&1 || break
   curl --noproxy '*' -fs -o /dev/null "http://127.0.0.1:$BACKEND_PORT/api/health" && break
   sleep 0.5
 done
 ps -p "$backend_pid" >/dev/null 2>&1 || { echo "后端启动失败（见 backend/server.log）" >&2; exit 1; }
 echo "$backend_pid" > "$ROOT_DIR/backend/server.pid"
-echo "后端已启动：http://$BACKEND_HOST:$BACKEND_PORT  (日志 backend/server.log)"
+echo "后端已启动：http://$BACKEND_HOST:$BACKEND_PORT  (pid $backend_pid, 日志 backend/server.log)"
 
 # 前端：依赖已装好就别再跑 npm install（省启动时间，也避开网络抖动）。
 # 端口与 /api、/drafts、/u 的代理都在 frontend/vite.config.js 里。
 cd "$ROOT_DIR/frontend"
 [[ -d node_modules ]] || npm install
-setsid npm run dev -- --host "${STUDY_FRONTEND_HOST:-127.0.0.1}" --port "$FRONTEND_PORT" \
+[[ -x node_modules/.bin/vite ]] || { echo "缺少 node_modules/.bin/vite（先跑 npm install）" >&2; exit 1; }
+
+# 起之前先确认端口是空的。曾经出过这样一档事：stop-dev 没真正杀干净，5408 上留着
+# 一个跑了一整天的旧 vite；新的 vite 静默漂到 5409，而下面的探活 curl 5408 被那个
+# 幽灵应答，于是脚本高高兴兴报"启动成功"，隧道那头连的却始终是旧进程。
+if [[ -n "$(port_pid "$FRONTEND_PORT")" ]]; then
+  echo "端口 $FRONTEND_PORT 已被 pid $(port_pid "$FRONTEND_PORT") 占用。先跑 bash stop-dev.sh" >&2
+  exit 1
+fi
+
+# 直接调 vite，不经 npm run dev：npm 只是外面一层壳，setsid 记下的 $! 会是 npm 的 pid，
+# stop-dev 照着 pid 文件 kill 掉的也是 npm，真正的 vite 就被留下来成了孤儿。
+# --strictPort：端口被占就退出，绝不静默换端口——端口口径(5408)是对外契约，
+# 前面还有 Cloudflare 按 5408 发布，漂了就等于服务悄悄搬家。
+setsid node_modules/.bin/vite --host "${STUDY_FRONTEND_HOST:-127.0.0.1}" \
+  --port "$FRONTEND_PORT" --strictPort \
   > "$ROOT_DIR/frontend/server.log" 2>&1 < /dev/null &
 frontend_pid=$!
 for _ in $(seq 1 60); do
+  # 进程先死掉就别再空等满 30 秒。
+  ps -p "$frontend_pid" >/dev/null 2>&1 || break
   curl --noproxy '*' -fs -o /dev/null "http://127.0.0.1:$FRONTEND_PORT/" && break
   sleep 0.5
 done
 ps -p "$frontend_pid" >/dev/null 2>&1 || { echo "前端启动失败（见 frontend/server.log）" >&2; exit 1; }
+# 探活过了还不够，得确认 5408 上坐着的确实是我们刚起的这个。
+listening_pid="$(port_pid "$FRONTEND_PORT")"
+[[ "$listening_pid" == "$frontend_pid" ]] || {
+  echo "前端端口 $FRONTEND_PORT 被 pid ${listening_pid:-未知} 占着，不是刚起的 $frontend_pid" >&2
+  exit 1
+}
 echo "$frontend_pid" > "$ROOT_DIR/frontend/server.pid"
-echo "前端已启动：http://127.0.0.1:$FRONTEND_PORT  (日志 frontend/server.log)"
+echo "前端已启动：http://127.0.0.1:$FRONTEND_PORT  (pid $frontend_pid, 日志 frontend/server.log)"
 
 echo "cs408 dev 已在后台启动。停止：bash stop-dev.sh"

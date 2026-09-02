@@ -1,5 +1,6 @@
 import sqlite3
 import unittest
+from datetime import datetime, timezone
 from unittest.mock import patch
 
 from app import plan
@@ -37,6 +38,16 @@ class PlanProgressionTests(unittest.TestCase):
 
     def tearDown(self):
         self.conn.close()
+
+    def test_study_day_changes_at_beijing_eight(self):
+        before_boundary = datetime(2026, 9, 1, 23, 59, tzinfo=timezone.utc)  # 北京时间 9 月 2 日 07:59
+        at_boundary = datetime(2026, 9, 2, 0, 0, tzinfo=timezone.utc)        # 北京时间 9 月 2 日 08:00
+
+        self.assertEqual(plan.today_str(before_boundary), '2026-09-01')
+        self.assertEqual(plan.today_str(at_boundary), '2026-09-02')
+        self.assertEqual(plan.task_deadline_at('2026-09-01'), '2026-09-02T00:00:00+00:00')
+        self.assertEqual(plan.next_study_boundary_at(before_boundary), '2026-09-02T00:00:00+00:00')
+        self.assertEqual(plan.next_study_boundary_at(at_boundary), '2026-09-03T00:00:00+00:00')
 
     @patch('app.plan.today_str', return_value='2026-09-02')
     def test_unfinished_exam_blocks_reinforcement_and_future_preview(self, _today):

@@ -153,7 +153,7 @@ CREATE TABLE IF NOT EXISTS plan_config (
 
 CREATE TABLE IF NOT EXISTS daily_tasks (
   id         INTEGER PRIMARY KEY AUTOINCREMENT,
-  plan_date  TEXT NOT NULL,                     -- YYYY-MM-DD（本地日期）
+  plan_date  TEXT NOT NULL,                     -- YYYY-MM-DD（学习日；次日北京时间 08:00 到期）
   kind       TEXT NOT NULL,                     -- exam(精做真题) | mock(模考) | reinforce(强化)
   ref_year   INTEGER,                           -- 真题/模考年份；强化为 NULL
   session_id INTEGER REFERENCES sessions(id) ON DELETE SET NULL,

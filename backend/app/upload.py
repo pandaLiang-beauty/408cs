@@ -77,8 +77,8 @@ button{margin-top:14px;width:100%;padding:13px;border:0;border-radius:10px;backg
 button:disabled{opacity:.5}.msg{margin-top:12px;font-size:14px}.ok{color:#2f7d47}.bad{color:#c23b3b}
 </style></head><body><div class=card>
 <h1>上传草稿纸</h1><p class=sub>__LABEL__</p>
-<label class=pick for=f>📷 拍照 / 从相册选择</label>
-<input id=f type=file accept="image/*" capture=environment>
+<label class=pick for=f>📷 拍照或从相册选择</label>
+<input id=f type=file accept="image/*">
 <img id=pv hidden><button id=go disabled>上传</button><div id=m class=msg></div>
 </div><script>
 var f=document.getElementById('f'),pv=document.getElementById('pv'),go=document.getElementById('go'),m=document.getElementById('m'),data=null;

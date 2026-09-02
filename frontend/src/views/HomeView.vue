@@ -39,6 +39,7 @@
             <div class="min-w-0 flex-1">
               <div class="font-song text-[17px] font-bold">今日 · {{ t.title }}</div>
               <div class="text-[13px] text-muted">{{ t.detail }}</div>
+              <div class="mt-0.5 text-[12px] text-muted">截止 {{ fmtDeadline(t.deadline_at) }}（北京时间）</div>
             </div>
             <el-button v-if="t.status !== 'done'" type="primary" :loading="startingId === t.id" @click="onStart(t)">
               {{ t.session_id ? '继续' : '开始' }}
@@ -54,7 +55,7 @@
             <span class="text-[20px]">⏳</span>
             <div class="min-w-0 flex-1">
               <div class="font-song text-[16px] font-bold">补做 · {{ t.title }}</div>
-              <div class="text-[12px] text-muted">原定 {{ fmtDate(t.date) }} {{ t.weekday }} · {{ t.detail }}</div>
+              <div class="text-[12px] text-muted">原定 {{ fmtDate(t.date) }} {{ t.weekday }} · 截止 {{ fmtDeadline(t.deadline_at) }}（北京时间）· {{ t.detail }}</div>
             </div>
             <el-button :loading="startingId === t.id" @click="onStart(t)">{{ t.session_id ? '继续' : '开始' }}</el-button>
           </article>
@@ -128,7 +129,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onBeforeUnmount, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { getPlan, getPlanCalendar, startTask, getYears, getReinforceStats } from '@/api/cs408/quiz'
@@ -141,10 +142,25 @@ const years = ref([])
 const stats = ref({ due: 0, pool: 0 })
 const startingId = ref(null)
 const ICON = { exam: '📄', reinforce: '🔁', mock: '🧪' }
+let studyBoundaryTimer = null
 
 function fmtDate(s) {
   const [, m, d] = (s || '').split('-')
   return `${Number(m)}月${Number(d)}日`
+}
+function fmtDeadline(value) {
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return '次日 08:00'
+  const parts = new Intl.DateTimeFormat('zh-CN', {
+    timeZone: 'Asia/Shanghai',
+    month: 'numeric',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23'
+  }).formatToParts(date)
+  const part = type => parts.find(item => item.type === type)?.value || ''
+  return `${part('month')}月${part('day')}日 ${part('hour')}:${part('minute')}`
 }
 const monthLabel = computed(() => {
   const [y, m] = (cal.value?.month || '').split('-')
@@ -172,6 +188,9 @@ function dayOf(d) {
 function isToday(d) {
   return dateStr(d) === cal.value.today
 }
+function isStudyDay(e) {
+  return e?.date === cal.value.study_day
+}
 function chip(e) {
   if (e.kind === 'reinforce') return '强化'
   return e.kind === 'mock' ? `模考${e.ref_year}` : `${e.ref_year}`
@@ -180,7 +199,7 @@ function actionable(e) {
   return !!e && !e.planned && e.status !== 'done'
 }
 function cellClass(e) {
-  const t = e && e.date === cal.value.today
+  const t = isStudyDay(e)
   if (!e) return 'border-transparent bg-transparent cursor-default'
   if (e.status === 'done') return 'border-ok bg-ok-soft cursor-default'
   if (e.planned) return 'border-dashed border-line bg-white/60 text-muted cursor-default'
@@ -197,6 +216,31 @@ function shift(n) {
   load(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`)
 }
 
+function clearStudyBoundaryTimer() {
+  if (studyBoundaryTimer !== null) window.clearTimeout(studyBoundaryTimer)
+  studyBoundaryTimer = null
+}
+
+function scheduleStudyBoundaryRefresh() {
+  clearStudyBoundaryTimer()
+  const boundary = Date.parse(String(plan.value?.next_study_boundary_at || ''))
+  if (!Number.isFinite(boundary)) return
+  const delay = Math.max(250, boundary - Date.now() + 250)
+  studyBoundaryTimer = window.setTimeout(async () => {
+    studyBoundaryTimer = null
+    try {
+      const [p, c, st] = await Promise.all([getPlan(), getPlanCalendar(), getReinforceStats()])
+      plan.value = p
+      cal.value = c
+      stats.value = { due: st.due, pool: st.pool }
+    } catch {
+      // 下一个边界仍会重新安排一次；避免边界时短暂网络故障让页面报错。
+    } finally {
+      scheduleStudyBoundaryRefresh()
+    }
+  }, Math.min(delay, 2147483647))
+}
+
 onMounted(async () => {
   try {
     const [p, c, ys, st] = await Promise.all([getPlan(), getPlanCalendar(), getYears(), getReinforceStats()])
@@ -204,12 +248,15 @@ onMounted(async () => {
     cal.value = c
     years.value = ys
     stats.value = { due: st.due, pool: st.pool }
+    scheduleStudyBoundaryRefresh()
   } catch {
     ElMessage.error('加载失败，请确认后端已在 8408 端口运行')
   } finally {
     loading.value = false
   }
 })
+
+onBeforeUnmount(clearStudyBoundaryTimer)
 
 // 开始任务：后端建/续对应的卷并绑定，前端带 sid 进卷面
 async function onStart(t) {
