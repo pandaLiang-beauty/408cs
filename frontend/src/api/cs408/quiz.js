@@ -39,6 +39,8 @@ export const gradeSubjective = (sid, question_id, answer_text) =>
 export const listNotes = (question_id) => axiosInstance.get('/notes', { params: { question_id } })
 export const addNote = (payload) => axiosInstance.post('/notes', payload)
 export const editNote = (id, body) => axiosInstance.patch(`/notes/${id}`, { body })
+export const addNoteImages = (id, images) => axiosInstance.post(`/notes/${id}/images`, { images })
+export const deleteNoteImage = (id) => axiosInstance.delete(`/note-images/${id}`)
 export const deleteNote = (id) => axiosInstance.delete(`/notes/${id}`)
 export const getNotebook = () => axiosInstance.get('/notebook')
 

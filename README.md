@@ -51,4 +51,5 @@ bash deploy.sh
 sqlite3 backend/data/study.db ".backup 'backend/data/study.backup-$(date +%Y%m%d-%H%M%S).db'"
 ```
 
-`backend/data/raw/`（题库原始 HTML）与 `backend/data/drafts/`（草稿）不入版本库，如需保留请另行备份。
+`backend/data/raw/`（题库原始 HTML）、`backend/data/drafts/`（草稿）与
+`backend/data/note_images/`（笔记图片）不入版本库，如需保留请另行备份。

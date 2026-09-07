@@ -6,6 +6,7 @@
   session_item   一次做题记录 = (session, question) 一行。同一题在不同卷里各占一行，
                  各自的 chosen/fuzzy/批改结果/草稿。刷新靠它恢复。
   note           笔记，一题多条，挂 question_id → 按题聚合成「笔记库」。
+  note_image     笔记图片附件，文件落盘，元数据挂 note_id。
   review_schedule SRS，按 question_id 一份 = 这题的整体掌握度，不随卷分裂。
 """
 
@@ -75,6 +76,18 @@ CREATE TABLE IF NOT EXISTS notes (
   updated_at  TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_note_q ON notes(question_id, created_at);
+
+CREATE TABLE IF NOT EXISTS note_images (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  note_id       INTEGER NOT NULL REFERENCES notes(id) ON DELETE CASCADE,
+  stored_name   TEXT NOT NULL UNIQUE,
+  original_name TEXT NOT NULL DEFAULT '',
+  mime_type     TEXT NOT NULL,
+  size_bytes    INTEGER NOT NULL,
+  position      INTEGER NOT NULL DEFAULT 0,
+  created_at    TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_note_image_note ON note_images(note_id, position, id);
 
 CREATE TABLE IF NOT EXISTS review_schedule (
   question_id INTEGER PRIMARY KEY REFERENCES questions(id) ON DELETE CASCADE,

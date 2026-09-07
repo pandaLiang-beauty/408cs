@@ -4,15 +4,19 @@
 同一题在不同卷里各占一行 session_item（各自 chosen/模糊/草稿）；笔记按题聚合成笔记库。
 """
 import base64
+import binascii
 import json
 import os
-from typing import Optional
+import secrets
+from pathlib import Path
+from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
-from pydantic import BaseModel
+from fastapi.responses import FileResponse
+from pydantic import BaseModel, Field
 
 from . import auth, grading, scheduler, llmconfig, upload, plan
-from .config import DRAFTS_DIR
+from .config import DRAFTS_DIR, NOTE_IMAGES_DIR
 from .db import get_db
 
 router = APIRouter(prefix='/api')
@@ -94,10 +98,16 @@ class GradeIn(BaseModel):
     answer_text: str
 
 
+class NoteImageIn(BaseModel):
+    image_base64: str
+    filename: str = ''
+
+
 class NoteIn(BaseModel):
     question_id: Optional[int] = None
     session_id: Optional[int] = None
     body: str = ''
+    images: List[NoteImageIn] = Field(default_factory=list)
 
 
 class LlmProfileIn(BaseModel):
@@ -379,45 +389,220 @@ def grade_subjective(sid: int, body: GradeIn, conn=Depends(get_db), _=Depends(au
     return {'verdict': verdict, 'score_ratio': j.get('score_ratio'),
             'comment': j.get('comment', ''), 'reference_html': q['answer_html']}
 
-def _note_row(r) -> dict:
-    return {'id': r['id'], 'question_id': r['question_id'], 'session_id': r['session_id'],
-            'body': r['body'], 'created_at': r['created_at'], 'updated_at': r['updated_at']}
+NOTE_IMAGE_LIMIT = 8
+NOTE_IMAGE_MAX_BYTES = 8 * 1024 * 1024
+NOTE_IMAGE_TOTAL_BYTES = 24 * 1024 * 1024
+NOTE_IMAGE_TYPES = {
+    'image/png': '.png',
+    'image/jpeg': '.jpg',
+    'image/webp': '.webp',
+    'image/gif': '.gif',
+}
+
+
+def _note_image_row(r) -> dict:
+    return {
+        'id': r['id'],
+        'filename': r['original_name'],
+        'mime_type': r['mime_type'],
+        'size_bytes': r['size_bytes'],
+        'url': f"/api/note-images/{r['id']}",
+        'download_url': f"/api/note-images/{r['id']}/download",
+    }
+
+
+def _note_images(conn, note_id: int) -> list:
+    rows = conn.execute(
+        'SELECT * FROM note_images WHERE note_id=? ORDER BY position, id', (note_id,)
+    ).fetchall()
+    return [_note_image_row(row) for row in rows]
+
+
+def _note_row(conn, r) -> dict:
+    return {
+        'id': r['id'], 'question_id': r['question_id'], 'session_id': r['session_id'],
+        'body': r['body'], 'created_at': r['created_at'], 'updated_at': r['updated_at'],
+        'images': _note_images(conn, r['id']),
+    }
+
+
+def _decode_note_image(item: NoteImageIn):
+    raw = (item.image_base64 or '').strip()
+    declared_type = ''
+    if raw.startswith('data:') and ',' in raw:
+        header, raw = raw.split(',', 1)
+        declared_type = header[5:].split(';', 1)[0].lower()
+    if len(raw) > (NOTE_IMAGE_MAX_BYTES * 4 // 3) + 16:
+        raise HTTPException(status_code=413, detail='单张笔记图片不能超过 8 MB')
+    try:
+        blob = base64.b64decode(''.join(raw.split()), validate=True)
+    except (binascii.Error, ValueError):
+        raise HTTPException(status_code=400, detail='笔记图片格式不正确')
+    if not blob:
+        raise HTTPException(status_code=400, detail='笔记图片为空')
+    if len(blob) > NOTE_IMAGE_MAX_BYTES:
+        raise HTTPException(status_code=413, detail='单张笔记图片不能超过 8 MB')
+
+    signatures = (
+        ('image/png', blob.startswith(b'\x89PNG\r\n\x1a\n')),
+        ('image/jpeg', blob.startswith(b'\xff\xd8\xff')),
+        ('image/webp', len(blob) >= 12 and blob[:4] == b'RIFF' and blob[8:12] == b'WEBP'),
+        ('image/gif', blob.startswith((b'GIF87a', b'GIF89a'))),
+    )
+    mime_type = next((mime for mime, matches in signatures if matches), '')
+    if not mime_type or (declared_type and declared_type not in NOTE_IMAGE_TYPES):
+        raise HTTPException(status_code=400, detail='仅支持 PNG、JPEG、WebP 或 GIF 图片')
+    return blob, mime_type
+
+
+def _store_note_images(conn, note_id: int, images: List[NoteImageIn],
+                       start_position: int = 0, existing_bytes: int = 0) -> list:
+    if len(images) > NOTE_IMAGE_LIMIT:
+        raise HTTPException(status_code=400, detail=f'一条笔记最多 {NOTE_IMAGE_LIMIT} 张图片')
+    decoded = [_decode_note_image(item) for item in images]
+    if existing_bytes + sum(len(blob) for blob, _ in decoded) > NOTE_IMAGE_TOTAL_BYTES:
+        raise HTTPException(status_code=413, detail='一条笔记图片总计不能超过 24 MB')
+
+    written = []
+    try:
+        for offset, (item, decoded_item) in enumerate(zip(images, decoded)):
+            blob, mime_type = decoded_item
+            stored_name = f'n{note_id}_{secrets.token_hex(12)}{NOTE_IMAGE_TYPES[mime_type]}'
+            path = NOTE_IMAGES_DIR / stored_name
+            path.write_bytes(blob)
+            written.append(path)
+            position = start_position + offset
+            safe_name = Path((item.filename or '').replace('\\', '/')).name
+            safe_name = ''.join(char for char in safe_name if char.isprintable())[:200]
+            original_name = safe_name or f'笔记图片{position + 1}{NOTE_IMAGE_TYPES[mime_type]}'
+            conn.execute(
+                'INSERT INTO note_images(note_id,stored_name,original_name,mime_type,size_bytes,position)'
+                ' VALUES(?,?,?,?,?,?)',
+                (note_id, stored_name, original_name, mime_type, len(blob), position),
+            )
+    except Exception:
+        for path in written:
+            path.unlink(missing_ok=True)
+        raise
+    return written
+
+
+def _note_image_or_404(conn, image_id: int):
+    row = conn.execute('SELECT * FROM note_images WHERE id=?', (image_id,)).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail='笔记图片不存在')
+    path = NOTE_IMAGES_DIR / row['stored_name']
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail='笔记图片文件不存在')
+    return row, path
 
 
 @router.get('/notes')
 def list_notes(question_id: int, conn=Depends(get_db), _=Depends(auth.require_user)):
     """某题的全部笔记（一题多条），按时间正序——看题时聚合到一起。"""
     rows = conn.execute('SELECT * FROM notes WHERE question_id=? ORDER BY created_at', (question_id,)).fetchall()
-    return [_note_row(r) for r in rows]
+    return [_note_row(conn, r) for r in rows]
 
 
 @router.post('/notes')
 def add_note(body: NoteIn, conn=Depends(get_db), _=Depends(auth.require_user)):
     if not body.question_id:
         raise HTTPException(status_code=400, detail='缺 question_id')
-    if not (body.body or '').strip():
+    if not (body.body or '').strip() and not body.images:
         raise HTTPException(status_code=400, detail='笔记为空')
+    if not conn.execute('SELECT 1 FROM questions WHERE id=?', (body.question_id,)).fetchone():
+        raise HTTPException(status_code=404, detail='题目不存在')
     cur = conn.execute('INSERT INTO notes(question_id,session_id,body) VALUES(?,?,?)',
                        (body.question_id, body.session_id, body.body.strip()))
-    conn.commit()
-    return _note_row(conn.execute('SELECT * FROM notes WHERE id=?', (cur.lastrowid,)).fetchone())
+    written = []
+    try:
+        written = _store_note_images(conn, cur.lastrowid, body.images)
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        for path in written:
+            path.unlink(missing_ok=True)
+        raise
+    return _note_row(conn, conn.execute('SELECT * FROM notes WHERE id=?', (cur.lastrowid,)).fetchone())
 
 
 @router.patch('/notes/{nid}')
 def edit_note(nid: int, body: NoteIn, conn=Depends(get_db), _=Depends(auth.require_user)):
-    r = conn.execute('SELECT id FROM notes WHERE id=?', (nid,)).fetchone()
+    r = conn.execute('SELECT * FROM notes WHERE id=?', (nid,)).fetchone()
     if not r:
         raise HTTPException(status_code=404, detail='笔记不存在')
-    conn.execute('UPDATE notes SET body=?,updated_at=? WHERE id=?',
-                 ((body.body or '').strip(), scheduler.now_iso(), nid))
+    text = (body.body or '').strip()
+    if not text and not _note_images(conn, nid):
+        raise HTTPException(status_code=400, detail='笔记为空')
+    conn.execute('UPDATE notes SET body=?,updated_at=? WHERE id=?', (text, scheduler.now_iso(), nid))
     conn.commit()
-    return _note_row(conn.execute('SELECT * FROM notes WHERE id=?', (nid,)).fetchone())
+    return _note_row(conn, conn.execute('SELECT * FROM notes WHERE id=?', (nid,)).fetchone())
+
+
+@router.post('/notes/{nid}/images')
+def add_note_images(nid: int, body: NoteIn, conn=Depends(get_db), _=Depends(auth.require_user)):
+    note = conn.execute('SELECT * FROM notes WHERE id=?', (nid,)).fetchone()
+    if not note:
+        raise HTTPException(status_code=404, detail='笔记不存在')
+    if not body.images:
+        raise HTTPException(status_code=400, detail='请选择笔记图片')
+    existing = conn.execute(
+        'SELECT COUNT(*) count, COALESCE(SUM(size_bytes), 0) bytes FROM note_images WHERE note_id=?',
+        (nid,),
+    ).fetchone()
+    if existing['count'] + len(body.images) > NOTE_IMAGE_LIMIT:
+        raise HTTPException(status_code=400, detail=f'一条笔记最多 {NOTE_IMAGE_LIMIT} 张图片')
+    written = []
+    try:
+        written = _store_note_images(
+            conn, nid, body.images,
+            start_position=existing['count'], existing_bytes=existing['bytes'],
+        )
+        conn.execute('UPDATE notes SET updated_at=? WHERE id=?', (scheduler.now_iso(), nid))
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        for path in written:
+            path.unlink(missing_ok=True)
+        raise
+    return _note_row(conn, conn.execute('SELECT * FROM notes WHERE id=?', (nid,)).fetchone())
+
+
+@router.get('/note-images/{image_id}')
+def view_note_image(image_id: int, conn=Depends(get_db), _=Depends(auth.require_user)):
+    row, path = _note_image_or_404(conn, image_id)
+    return FileResponse(path, media_type=row['mime_type'], content_disposition_type='inline')
+
+
+@router.get('/note-images/{image_id}/download')
+def download_note_image(image_id: int, conn=Depends(get_db), _=Depends(auth.require_user)):
+    row, path = _note_image_or_404(conn, image_id)
+    return FileResponse(path, media_type=row['mime_type'], filename=row['original_name'])
+
+
+@router.delete('/note-images/{image_id}')
+def delete_note_image(image_id: int, conn=Depends(get_db), _=Depends(auth.require_user)):
+    row, path = _note_image_or_404(conn, image_id)
+    note = conn.execute('SELECT body FROM notes WHERE id=?', (row['note_id'],)).fetchone()
+    count = conn.execute(
+        'SELECT COUNT(*) count FROM note_images WHERE note_id=?', (row['note_id'],)
+    ).fetchone()['count']
+    if count == 1 and note and not note['body'].strip():
+        raise HTTPException(status_code=400, detail='笔记至少需要文字或一张图片')
+    conn.execute('DELETE FROM note_images WHERE id=?', (image_id,))
+    conn.execute('UPDATE notes SET updated_at=? WHERE id=?', (scheduler.now_iso(), row['note_id']))
+    conn.commit()
+    path.unlink(missing_ok=True)
+    return {'ok': True}
 
 
 @router.delete('/notes/{nid}')
 def delete_note(nid: int, conn=Depends(get_db), _=Depends(auth.require_user)):
+    images = conn.execute('SELECT stored_name FROM note_images WHERE note_id=?', (nid,)).fetchall()
     conn.execute('DELETE FROM notes WHERE id=?', (nid,))
     conn.commit()
+    for image in images:
+        (NOTE_IMAGES_DIR / image['stored_name']).unlink(missing_ok=True)
     return {'ok': True}
 
 
@@ -425,7 +610,7 @@ def delete_note(nid: int, conn=Depends(get_db), _=Depends(auth.require_user)):
 def notebook(conn=Depends(get_db), _=Depends(auth.require_user)):
     """笔记库：所有笔记 + 所属题目信息，按题聚合返回。"""
     rows = conn.execute(
-        'SELECT n.id, n.body, n.created_at, n.updated_at, q.id qid, q.year, q.number,'
+        'SELECT n.id, n.question_id, n.session_id, n.body, n.created_at, n.updated_at, q.id qid, q.year, q.number,'
         ' q.subject, q.qtype, q.tags, q.stem_html'
         ' FROM notes n JOIN questions q ON q.id=n.question_id'
         ' ORDER BY q.year DESC, q.number, n.created_at').fetchall()
@@ -435,8 +620,7 @@ def notebook(conn=Depends(get_db), _=Depends(auth.require_user)):
             'question_id': r['qid'], 'year': r['year'], 'number': r['number'],
             'subject': r['subject'], 'qtype': r['qtype'], 'tags': r['tags'],
             'stem_html': r['stem_html'], 'notes': []})
-        g['notes'].append({'id': r['id'], 'body': r['body'],
-                           'created_at': r['created_at'], 'updated_at': r['updated_at']})
+        g['notes'].append(_note_row(conn, r))
     return list(groups.values())
 
 
@@ -552,6 +736,3 @@ def put_plan_config(body: PlanConfigIn, conn=Depends(get_db), _=Depends(auth.req
     conn.execute('UPDATE plan_config SET exam_date=? WHERE id=1', (body.exam_date,))
     conn.commit()
     return plan.view(conn)
-
-
-
