@@ -5,13 +5,16 @@
 开发期后端需监听 0.0.0.0 手机才能访问（仅限同一局域网）；上线后用 STUDY_PUBLIC_BASE 指向公网域名。
 """
 import base64
+import binascii
 import re
 import secrets
 import socket
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import HTMLResponse
+from pydantic import BaseModel
 
 from .config import DRAFTS_DIR, settings
 from .db import get_db
@@ -20,8 +23,83 @@ router = APIRouter()
 TTL_MINUTES = 10
 
 
+class ImageUploadIn(BaseModel):
+    image_base64: str
+
+
 def _now():
     return datetime.now(timezone.utc)
+
+
+def draft_state(conn, item_id: int) -> dict:
+    rows = conn.execute(
+        'SELECT id,stored_name,created_at FROM draft_images WHERE session_item_id=? ORDER BY id',
+        (item_id,),
+    ).fetchall()
+    images = [{
+        'id': row['id'],
+        # 迁移的旧文件也带稳定版本，避免浏览器继续使用覆盖前的缓存。
+        'url': f"/drafts/{Path(row['stored_name']).name}?v={row['id']}",
+        'created_at': row['created_at'],
+    } for row in rows]
+    return {'drafts': images, 'draft_url': images[-1]['url'] if images else ''}
+
+
+def _decode_image(raw: str):
+    raw = raw.split(',', 1)[1] if ',' in raw else raw
+    if not raw or len(raw) > 12_000_000:  # ~9MB 图片上限，手机和本机选图共用
+        raise HTTPException(status_code=400, detail='图片为空或过大（单张最多 9 MB）')
+    try:
+        blob = base64.b64decode(re.sub(r'\s+', '', raw), validate=True)
+    except (binascii.Error, ValueError):
+        raise HTTPException(status_code=400, detail='图片格式不正确')
+    signatures = (
+        ('.png', blob.startswith(b'\x89PNG\r\n\x1a\n')),
+        ('.jpg', blob.startswith(b'\xff\xd8\xff')),
+        ('.webp', len(blob) >= 12 and blob[:4] == b'RIFF' and blob[8:12] == b'WEBP'),
+        ('.gif', blob.startswith((b'GIF87a', b'GIF89a'))),
+    )
+    extension = next((ext for ext, matches in signatures if matches), '')
+    if not extension:
+        raise HTTPException(status_code=400, detail='仅支持 PNG、JPEG、WebP 或 GIF 图片')
+    return blob, extension
+
+
+def save_draft_image(conn, session_id: int, question_id: int, raw: str, token=None) -> dict:
+    """两种上传入口都追加独立文件；令牌、图片关联与作答记录一起提交。"""
+    it = conn.execute('SELECT id FROM session_items WHERE session_id=? AND question_id=?',
+                      (session_id, question_id)).fetchone()
+    if not it:
+        raise HTTPException(status_code=404, detail='该题不在此卷中')
+    blob, extension = _decode_image(raw)
+    fname = f's{session_id}_q{question_id}_{secrets.token_hex(12)}{extension}'
+    path = DRAFTS_DIR / fname
+    now = _now().isoformat()
+    written = False
+    try:
+        with conn:
+            if token is not None:
+                claimed = conn.execute(
+                    'UPDATE draft_tokens SET used_at=? WHERE token=? AND session_id=?'
+                    ' AND question_id=? AND used_at IS NULL AND expires_at>?',
+                    (now, token, session_id, question_id, now),
+                ).rowcount
+                if claimed != 1:
+                    raise HTTPException(status_code=410, detail='链接已使用或过期，请在电脑上重新生成二维码')
+            conn.execute(
+                'INSERT INTO draft_images(session_item_id,stored_name,created_at) VALUES(?,?,?)',
+                (it['id'], fname, now),
+            )
+            with path.open('xb') as dest:
+                written = True
+                dest.write(blob)
+            conn.execute('UPDATE session_items SET draft_path=?,updated_at=? WHERE id=?',
+                         (fname, now, it['id']))
+    except Exception:
+        if written:
+            path.unlink(missing_ok=True)
+        raise
+    return {'ok': True, **draft_state(conn, it['id'])}
 
 
 def lan_ip() -> str:
@@ -77,8 +155,9 @@ button{margin-top:14px;width:100%;padding:13px;border:0;border-radius:10px;backg
 button:disabled{opacity:.5}.msg{margin-top:12px;font-size:14px}.ok{color:#2f7d47}.bad{color:#c23b3b}
 </style></head><body><div class=card>
 <h1>上传草稿纸</h1><p class=sub>__LABEL__</p>
+<p class=sub>每次追加一张草稿。继续上传时，请在电脑上重新生成二维码。</p>
 <label class=pick for=f>📷 拍照或从相册选择</label>
-<input id=f type=file accept="image/*">
+<input id=f type=file accept="image/png,image/jpeg,image/webp,image/gif">
 <img id=pv hidden><button id=go disabled>上传</button><div id=m class=msg></div>
 </div><script>
 var f=document.getElementById('f'),pv=document.getElementById('pv'),go=document.getElementById('go'),m=document.getElementById('m'),data=null;
@@ -87,7 +166,7 @@ r.onload=function(){data=r.result;pv.src=data;pv.hidden=false;go.disabled=false;
 go.onclick=function(){if(!data)return;go.disabled=true;m.textContent='上传中…';m.className='msg';
 fetch(location.pathname,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({image_base64:data})})
 .then(function(r){return r.json().then(function(j){if(!r.ok)throw new Error(j.error||'上传失败');return j;});})
-.then(function(){m.textContent='✓ 已上传，回电脑上看即可';m.className='msg ok';})
+.then(function(){f.disabled=true;go.textContent='已上传';m.textContent='✓ 已追加草稿，回电脑上看即可。继续上传请扫描新的二维码。';m.className='msg ok';})
 .catch(function(e){m.textContent='✗ '+e.message;m.className='msg bad';go.disabled=false;});};
 </script></body></html>"""
 
@@ -105,26 +184,6 @@ def upload_page(token: str, conn=Depends(get_db)):
 
 
 @router.post('/u/{token}')
-async def upload_submit(token: str, request: Request, conn=Depends(get_db)):
+def upload_submit(token: str, body: ImageUploadIn, conn=Depends(get_db)):
     r = _load_token(conn, token)
-    body = await request.json()
-    raw = (body or {}).get('image_base64') or ''
-    if ',' in raw:
-        raw = raw.split(',', 1)[1]
-    if not raw or len(raw) > 12_000_000:          # ~9MB 图片上限
-        raise HTTPException(status_code=400, detail='图片为空或过大')
-    try:
-        blob = base64.b64decode(re.sub(r'\s+', '', raw), validate=True)
-    except Exception:
-        raise HTTPException(status_code=400, detail='图片格式不正确')
-    it = conn.execute('SELECT id FROM session_items WHERE session_id=? AND question_id=?',
-                      (r['session_id'], r['question_id'])).fetchone()
-    if not it:
-        raise HTTPException(status_code=404, detail='该题不在此卷中')
-    fname = f"s{r['session_id']}_q{r['question_id']}.png"
-    (DRAFTS_DIR / fname).write_bytes(blob)
-    conn.execute('UPDATE session_items SET draft_path=?, updated_at=? WHERE id=?',
-                 (fname, _now().isoformat(), it['id']))
-    conn.execute('UPDATE draft_tokens SET used_at=? WHERE token=?', (_now().isoformat(), token))
-    conn.commit()
-    return {'ok': True, 'draft_url': '/drafts/' + fname}
+    return save_draft_image(conn, r['session_id'], r['question_id'], body.image_base64, token)

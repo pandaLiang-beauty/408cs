@@ -12,6 +12,12 @@ export const createSession = (payload) => axiosInstance.post('/sessions', payloa
 // 按 id 取一场做题的完整状态（刷新恢复）
 export const getSession = (sid) => axiosInstance.get(`/sessions/${sid}`)
 
+// 文字批注跟随本次作答保存。
+export const listAnnotations = (sid) => axiosInstance.get(`/sessions/${sid}/annotations`)
+export const addAnnotation = (sid, payload) => axiosInstance.post(`/sessions/${sid}/annotations`, payload)
+export const editAnnotation = (sid, id, payload) => axiosInstance.patch(`/sessions/${sid}/annotations/${id}`, payload)
+export const deleteAnnotation = (sid, id) => axiosInstance.delete(`/sessions/${sid}/annotations/${id}`)
+
 // 自动保存单题作答（选项 / 模糊）
 export const patchItem = (sid, qid, patch) =>
   axiosInstance.patch(`/sessions/${sid}/items/${qid}`, patch)

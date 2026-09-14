@@ -2,7 +2,10 @@
   <main class="px-3.5 pb-24 pt-6">
     <div v-if="store.loading" class="py-16 text-center text-muted">出卷中…</div>
 
-    <template v-else>
+    <PaperAnnotations
+      v-else :session-id="store.sessionId" :questions="store.questions" :graded="store.graded" :mode="store.mode"
+      :render-key="`${page}:${store.graded}`" @locate="locateQuestion"
+    >
       <Scorecard v-if="store.graded && store.summary" :summary="store.summary" />
 
       <div class="mx-auto max-w-[820px] rounded-md border border-line bg-paper px-10 py-8 shadow-lg max-sm:px-4">
@@ -67,7 +70,7 @@
           </template>
         </div>
       </div>
-    </template>
+    </PaperAnnotations>
 
     <DraftDialog />
     <NoteDrawer />
@@ -83,6 +86,7 @@ import QuestionCard from '@/components/QuestionCard.vue'
 import Scorecard from '@/components/Scorecard.vue'
 import DraftDialog from '@/components/DraftDialog.vue'
 import NoteDrawer from '@/components/NoteDrawer.vue'
+import PaperAnnotations from '@/components/PaperAnnotations.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -151,8 +155,8 @@ onBeforeUnmount(() => {
 
 // 真题卷按正常试卷组织并分页：单选连续为一节、综合大题为一节；强化卷保持单页连续流。
 const pages = computed(() => {
+  if (!isExam.value) return [[{ title: '', items: store.questions.map((q, i) => ({ q, index: i })) }]]
   const qs = [...store.questions].sort((a, b) => a.number - b.number)
-  if (!isExam.value) return [[{ title: '', items: qs.map((q, i) => ({ q, index: i })) }]]
 
   const choice = qs.filter((q) => q.qtype === 'choice')
   const subjective = qs.filter((q) => q.qtype === 'subjective')
@@ -181,6 +185,11 @@ function go(p) {
   window.scrollTo({ top: 0, behavior: 'smooth' })
 }
 
+function locateQuestion(questionId) {
+  const index = pages.value.findIndex(groups => groups.some(group => group.items.some(item => item.q.id === questionId)))
+  if (index >= 0) page.value = index + 1
+}
+
 const statusText = computed(() =>
   store.graded ? '已交卷' : `已作答 ${store.answeredCount} / ${store.questions.length}`,
 )
@@ -188,12 +197,13 @@ const statusText = computed(() =>
 // 卷头信息：真题套卷是真 408 结构（单选 80 + 综合 70 = 150）；强化卷只报题数。
 const paperMeta = computed(() => {
   const qs = store.questions
+  const instruction = store.graded ? '已交卷 · 可选中文字添加复盘批注' : '选出答案后点「交卷」'
   if (isExam.value) {
     const c = qs.filter((q) => q.qtype === 'choice').length
     const s = qs.filter((q) => q.qtype === 'subjective').length
-    return `单选 ${c} 题 · 综合 ${s} 题 · 满分 150 分 · 共 ${totalPages.value} 页 · 选出答案后点「交卷」`
+    return `单选 ${c} 题 · 综合 ${s} 题 · 满分 150 分 · 共 ${totalPages.value} 页 · ${instruction}`
   }
-  return `共 ${qs.length} 题 · 同知识点强化 · 选出答案后点「交卷」`
+  return `共 ${qs.length} 题 · 同知识点强化 · ${instruction}`
 })
 
 async function onSubmit() {

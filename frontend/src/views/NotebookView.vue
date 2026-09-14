@@ -30,7 +30,7 @@
       <div v-else class="flex flex-col gap-4">
         <section v-for="g in filtered" :key="g.question_id" class="rounded-md border border-line bg-paper p-4 shadow-sm">
           <div class="mb-1 flex items-center gap-2 text-xs text-muted">
-            <span class="rounded bg-bgwarm px-1.5 py-0.5">{{ g.year }} · {{ g.qtype === 'choice' ? '单选' : '综合' }} 第 {{ g.number }} 题</span>
+            <span class="rounded bg-bgwarm px-1.5 py-0.5">{{ questionSource(g) }} · {{ g.qtype === 'choice' ? '单选' : '综合' }} 第 {{ g.number }} 题</span>
             <span v-if="g.subject">{{ g.subject }}</span>
             <span v-for="t in tagsOf(g)" :key="t" class="rounded-full bg-primary-soft px-2 py-0.5 text-primary">{{ t }}</span>
           </div>
@@ -48,10 +48,11 @@
                   rows="3"
                   aria-label="编辑笔记"
                   class="w-full resize-y rounded border border-line bg-white p-1.5 text-sm leading-6 outline-none focus:border-primary"
-                  placeholder="编辑笔记"
+                  placeholder="编辑笔记，可按 Ctrl+V / ⌘V 粘贴图片"
                   @paste="onPasteImage($event, n)"
                   @keydown.esc.prevent="cancelEdit"
                 />
+                <p class="text-[11px] text-muted">支持 Ctrl+V / ⌘V 粘贴图片。</p>
                 <div class="mt-1 flex items-center gap-2">
                   <button
                     type="submit"
@@ -68,12 +69,10 @@
                   >
                     取消
                   </button>
-                  <el-tooltip content="添加图片" placement="top">
-                    <label class="note-toolbar-icon" aria-label="添加图片">
-                      <el-icon><Picture /></el-icon>
-                      <input type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple class="hidden" @change="onChooseImages($event, n)" />
-                    </label>
-                  </el-tooltip>
+                  <NoteImagePicker
+                    :disabled="uploadingNoteId !== null || savingNoteId === n.id"
+                    @select="onChooseImages($event, n)"
+                  />
                 </div>
               </form>
               <template v-else>
@@ -110,9 +109,11 @@
 
 <script setup>
 import { ref, computed, onMounted } from 'vue'
-import { Download, Edit, Picture } from '@element-plus/icons-vue'
+import { Download, Edit } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import NoteImageGallery from '@/components/NoteImageGallery.vue'
+import NoteImagePicker from '@/components/NoteImagePicker.vue'
+import { questionSource } from '@/utils/questionSource'
 import { addNoteImages, deleteNoteImage, editNote, getNotebook } from '@/api/cs408/quiz'
 import {
   clipboardImageFiles, exportNoteAsPng, filesToNotePayload, validateNoteImageFiles,
@@ -186,33 +187,23 @@ async function uploadImages(note, files) {
   note.updated_at = updated.updated_at
 }
 
-async function onPasteImage(event, note) {
+function onPasteImage(event, note) {
   const files = clipboardImageFiles(event)
   if (!files.length) return
   event.preventDefault()
-  if (uploadingNoteId.value === note.id) return
+  return onChooseImages(files, note)
+}
+
+async function onChooseImages(files, note) {
+  if (!files.length || uploadingNoteId.value !== null || savingNoteId.value === note.id) return
   uploadingNoteId.value = note.id
   try {
     await uploadImages(note, files)
-    ElMessage.success(`已粘贴 ${files.length} 张截图`)
-  } catch (error) {
-    ElMessage.error(error?.response?.data?.error || error.message || '图片上传失败')
-  } finally {
-    uploadingNoteId.value = null
-  }
-}
-
-async function onChooseImages(event, note) {
-  if (uploadingNoteId.value === note.id) return
-  uploadingNoteId.value = note.id
-  try {
-    await uploadImages(note, event.target.files)
     ElMessage.success('图片已添加')
   } catch (error) {
     ElMessage.error(error?.response?.data?.error || error.message || '图片上传失败')
   } finally {
     uploadingNoteId.value = null
-    event.target.value = ''
   }
 }
 
@@ -238,7 +229,7 @@ async function removeImage(note, image) {
 }
 
 async function exportImage(note, group) {
-  const label = `${group.year} 年 · ${group.subject || '408'} · 第 ${group.number} 题`
+  const label = `${questionSource(group)} · ${group.subject || '408'} · 第 ${group.number} 题`
   try {
     await exportNoteAsPng(note, label)
   } catch (error) {

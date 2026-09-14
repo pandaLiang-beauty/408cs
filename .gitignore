@@ -34,5 +34,8 @@ backend/data/*.db-shm
 # 已追踪文件），仓库里那份快照照旧在；这几条只挡住之后新抓的题料和新写的草稿。
 backend/data/raw/
 backend/data/raw_sim/
+backend/data/raw_exercise/
+backend/data/backups/
+backend/data/import_reports/
 backend/data/drafts/
 backend/data/note_images/

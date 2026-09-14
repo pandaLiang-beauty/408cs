@@ -1,5 +1,5 @@
 <template>
-  <article class="border-b border-[#f0ece3] py-4">
+  <article class="border-b border-[#f0ece3] py-4" :data-question-id="question.id">
     <div class="mb-1.5 flex items-center gap-2">
       <span class="font-song text-[16px] font-bold">{{ displayNo }}.</span>
       <span class="rounded bg-primary-soft px-1.5 text-[12px] text-primary">大题 · {{ question.subject || '综合' }}</span>
@@ -7,14 +7,15 @@
         type="button"
         class="iconbtn"
         :class="{ 'iconbtn-on': hasDraft }"
-        :title="hasDraft ? '已有草稿纸（点开查看/重传）' : '上传草稿纸（手机扫码拍照）'"
+        :title="hasDraft ? '已有草稿纸（点开查看/追加）' : '上传草稿纸（手机扫码拍照）'"
         @click="store.openDraft(question.id)"
       >📷<span v-if="hasDraft" class="ml-0.5 text-[11px]">✓</span></button>
       <button type="button" class="iconbtn" title="本题笔记（右侧打开）" @click="store.openNote(question.id)">📝</button>
+      <QuestionAnnotationButton :question-id="question.id" :number="displayNo" />
     </div>
     <div class="qhtml font-song text-[16px] leading-[1.9]">
-      <span v-if="mode === 'reinforce' && question.year" class="text-muted">[{{ origin }}] </span>
-      <span v-html="question.stem_html"></span>
+      <span v-if="mode === 'reinforce'" class="text-muted">[{{ origin }}] </span>
+      <span data-annotation-region="stem" v-html="question.stem_html"></span>
     </div>
 
     <textarea
@@ -38,7 +39,7 @@
       </div>
       <details class="rounded-lg border border-line bg-white p-3">
         <summary class="cursor-pointer text-sm font-semibold text-primary">查看参考答案</summary>
-        <div class="qhtml mt-2 text-sm leading-7" v-html="result.reference_html"></div>
+        <div class="qhtml mt-2 text-sm leading-7" data-annotation-region="explanation" v-html="result.reference_html"></div>
       </details>
     </div>
     <p v-if="error" class="mt-2 text-sm text-bad">{{ error }}</p>
@@ -49,6 +50,8 @@
 import { ref, computed } from 'vue'
 import { usePaperStore } from '@/stores/paper'
 import { gradeSubjective } from '@/api/cs408/quiz'
+import { questionSource } from '@/utils/questionSource'
+import QuestionAnnotationButton from './QuestionAnnotationButton.vue'
 
 const props = defineProps({
   question: { type: Object, required: true },
@@ -66,9 +69,7 @@ const error = ref('')
 const mode = computed(() => store.mode)
 const hasDraft = computed(() => !!store.items?.[props.question.id]?.draft_url)
 const displayNo = computed(() => (mode.value === 'exam' ? props.question.number : props.index + 1))
-const origin = computed(() =>
-  props.question.source === 'simulate' ? '模拟' + props.question.year : props.question.year,
-)
+const origin = computed(() => questionSource(props.question))
 const ratioText = computed(() =>
   result.value && result.value.score_ratio != null ? Math.round(result.value.score_ratio * 100) + '%' : '—',
 )

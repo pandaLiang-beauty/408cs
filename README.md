@@ -53,3 +53,7 @@ sqlite3 backend/data/study.db ".backup 'backend/data/study.backup-$(date +%Y%m%d
 
 `backend/data/raw/`（题库原始 HTML）、`backend/data/drafts/`（草稿）与
 `backend/data/note_images/`（笔记图片）不入版本库，如需保留请另行备份。
+
+强化题库已接入 CSGraduates 的经典练习，支持专题来源和交卷后解析。导入数量、选题优先级及增量导入命令见 [经典练习说明](docs/classic-exercises.md)。
+
+交卷后可选中题干、选项或解析文字，在右侧边栏添加复盘批注；每次作答独立保存。使用方法见 [复盘批注说明](docs/review-annotations.md)。

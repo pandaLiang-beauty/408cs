@@ -52,3 +52,17 @@ body {
 .qhtml table { border-collapse: collapse; margin: 10px 0; }
 .qhtml th, .qhtml td { border: 1px solid #c9c3b6; padding: 4px 10px; text-align: left; }
 .qhtml thead th { background: #f3f0ea; }
+.qhtml .question-context {
+  margin: 8px 0 14px;
+  border-left: 3px solid #d8c6aa;
+  padding: 8px 12px;
+  background: #faf8f4;
+}
+
+[data-annotation-region] { user-select: text; -webkit-user-select: text; }
+::highlight(cs408-comments) { background-color: #fff0ab; }
+::highlight(cs408-comment-active) { background-color: #f0bdba; text-decoration: underline #b95640; }
+::highlight(cs408-comment-draft) { background-color: #f0bdba; }
+.annotation-mark { color: inherit; background: #fff0ab; }
+.annotation-mark-active { background: #f0bdba; text-decoration: underline #b95640; }
+[data-active-question-annotation] { box-shadow: inset 3px 0 #c76750; }

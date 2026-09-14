@@ -5,6 +5,7 @@
   session        一场做题：真题套卷(exam,含 year) 或 强化卷(reinforce)；有 doing/graded 状态。
   session_item   一次做题记录 = (session, question) 一行。同一题在不同卷里各占一行，
                  各自的 chosen/fuzzy/批改结果/草稿。刷新靠它恢复。
+  draft_image    本次作答的草稿图片，一条 session_item 可追加多张。
   note           笔记，一题多条，挂 question_id → 按题聚合成「笔记库」。
   note_image     笔记图片附件，文件落盘，元数据挂 note_id。
   review_schedule SRS，按 question_id 一份 = 这题的整体掌握度，不随卷分裂。
@@ -58,7 +59,7 @@ CREATE TABLE IF NOT EXISTS session_items (
   fuzzy       INTEGER NOT NULL DEFAULT 0,
   is_correct  INTEGER,                            -- 交卷/批改后才有
   result      TEXT NOT NULL DEFAULT '',           -- correct | wrong | fuzzy
-  draft_path  TEXT NOT NULL DEFAULT '',           -- 本次做题的草稿纸(每场各存一份)
+  draft_path  TEXT NOT NULL DEFAULT '',           -- 最近一张草稿（兼容旧数据）；完整列表在 draft_images
   answer_text TEXT NOT NULL DEFAULT '',           -- 大题：本次作答原文
   verdict     TEXT NOT NULL DEFAULT '',           -- 大题：AI 判定(对/部分对/错)
   comment     TEXT NOT NULL DEFAULT '',           -- 大题：AI 点评
@@ -66,6 +67,32 @@ CREATE TABLE IF NOT EXISTS session_items (
   UNIQUE(session_id, question_id)
 );
 CREATE INDEX IF NOT EXISTS idx_si_q ON session_items(question_id);
+
+CREATE TABLE IF NOT EXISTS draft_images (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  session_item_id INTEGER NOT NULL REFERENCES session_items(id) ON DELETE CASCADE,
+  stored_name     TEXT NOT NULL UNIQUE,
+  created_at      TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_draft_item ON draft_images(session_item_id, id);
+
+-- Word 式批注属于本次作答，不与重做同一题时的批注混在一起。
+CREATE TABLE IF NOT EXISTS annotations (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  session_item_id INTEGER NOT NULL REFERENCES session_items(id) ON DELETE CASCADE,
+  client_id       TEXT NOT NULL UNIQUE,
+  region          TEXT NOT NULL,
+  quote           TEXT NOT NULL DEFAULT '',
+  start_offset    INTEGER,
+  end_offset      INTEGER,
+  prefix          TEXT NOT NULL DEFAULT '',
+  suffix          TEXT NOT NULL DEFAULT '',
+  body            TEXT NOT NULL,
+  resolved        INTEGER NOT NULL DEFAULT 0 CHECK (resolved IN (0, 1)),
+  created_at      TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at      TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_annotation_item ON annotations(session_item_id, id);
 
 CREATE TABLE IF NOT EXISTS notes (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -181,6 +208,10 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_task_plan_date_unique ON daily_tasks(plan_
 def initialize(conn) -> None:
     _pre_migrate(conn)          # 先给老表补列，之后 SCHEMA_SQL 里引用 source 的索引才不会报错
     conn.executescript(SCHEMA_SQL)
+    # 保留旧版每次作答的单张草稿；重复启动不会重复导入，也不会改动图片文件。
+    conn.execute(
+        'INSERT OR IGNORE INTO draft_images(session_item_id,stored_name,created_at)'
+        " SELECT id,draft_path,updated_at FROM session_items WHERE draft_path<>''")
     conn.commit()
 
 

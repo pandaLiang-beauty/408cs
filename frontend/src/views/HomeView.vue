@@ -44,7 +44,10 @@
             <el-button v-if="t.status !== 'done'" type="primary" :loading="startingId === t.id" @click="onStart(t)">
               {{ t.session_id ? '继续' : '开始' }}
             </el-button>
-            <span v-else class="text-sm font-semibold text-ok">✓ 已完成</span>
+            <div v-else class="flex shrink-0 flex-col items-end gap-1">
+              <span class="text-sm font-semibold text-ok">✓ 已完成</span>
+              <el-button v-if="canReview(t)" size="small" @click="openReview(t)">复盘批注</el-button>
+            </div>
           </article>
 
           <article
@@ -81,18 +84,23 @@
               v-for="d in cal.days_in_month"
               :key="d"
               type="button"
-              class="flex min-h-[62px] flex-col rounded-lg border p-1.5 text-left transition"
+              class="flex min-h-[62px] min-w-0 flex-col rounded-lg border p-1.5 text-left transition"
               :class="cellClass(dayOf(d))"
               :disabled="!actionable(dayOf(d))"
+              :aria-label="canReview(dayOf(d)) ? `${fmtDate(dateStr(d))}，${dayOf(d).title}，复盘批注` : undefined"
+              :title="canReview(dayOf(d)) ? '打开这次已交卷记录，查看答案并添加复盘批注' : undefined"
               @click="onCell(dayOf(d))"
             >
               <span class="text-[12px] font-bold" :class="isToday(d) ? 'text-primary' : 'text-muted'">
                 {{ d }}<span v-if="isToday(d)" class="ml-0.5 font-normal">今天</span>
               </span>
               <span v-if="dayOf(d)" class="mt-0.5 truncate text-[11px] leading-4">
-                {{ ICON[dayOf(d).kind] }} {{ chip(dayOf(d)) }}
+                <span class="hidden sm:inline">{{ ICON[dayOf(d).kind] }} </span>{{ chip(dayOf(d)) }}
               </span>
-              <span v-if="dayOf(d)?.status === 'done'" class="mt-auto text-[11px] font-bold text-ok">✓</span>
+              <span v-if="dayOf(d)?.status === 'done'" class="mt-auto text-[11px] font-bold text-ok">
+                <template v-if="canReview(dayOf(d))"><span class="hidden sm:inline">✓ 复盘批注</span><span class="sm:hidden">复盘</span></template>
+                <template v-else>✓</template>
+              </span>
             </button>
           </div>
 
@@ -195,13 +203,18 @@ function chip(e) {
   if (e.kind === 'reinforce') return '强化'
   return e.kind === 'mock' ? `模考${e.ref_year}` : `${e.ref_year}`
 }
+function canReview(e) {
+  return !!e && !e.planned && e.status === 'done' && !!e.session_id
+}
 function actionable(e) {
-  return !!e && !e.planned && e.status !== 'done'
+  return !!e && !e.planned && (e.status !== 'done' || canReview(e))
 }
 function cellClass(e) {
   const t = isStudyDay(e)
   if (!e) return 'border-transparent bg-transparent cursor-default'
-  if (e.status === 'done') return 'border-ok bg-ok-soft cursor-default'
+  if (e.status === 'done') return canReview(e)
+    ? 'border-ok bg-ok-soft cursor-pointer hover:border-primary hover:shadow-sm'
+    : 'border-ok bg-ok-soft cursor-default'
   if (e.planned) return 'border-dashed border-line bg-white/60 text-muted cursor-default'
   if (t) return 'border-primary bg-primary-soft font-semibold'
   return 'border-amber bg-amber-soft'          // 过期未做 = 欠账
@@ -274,7 +287,12 @@ async function onStart(t) {
   }
 }
 function onCell(e) {
-  if (actionable(e)) onStart(e)
+  if (!actionable(e)) return
+  if (canReview(e)) openReview(e)
+  else onStart(e)
+}
+function openReview(t) {
+  if (canReview(t)) router.push({ name: 'paper', query: { sid: t.session_id } })
 }
 function go(mode, query) {
   router.push({ name: 'paper', query: { mode, ...query } })

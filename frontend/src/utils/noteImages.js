@@ -25,10 +25,36 @@ export function validateNoteImageFiles(files, currentCount = 0, currentBytes = 0
 }
 
 export function clipboardImageFiles(event) {
-  return Array.from(event.clipboardData?.items || [])
+  const files = Array.from(event.clipboardData?.items || [])
     .filter((item) => item.kind === 'file' && item.type.startsWith('image/'))
     .map((item) => item.getAsFile())
     .filter(Boolean)
+  if (files.length) return files
+  return Array.from(event.clipboardData?.files || [])
+    .filter((file) => file.type.startsWith('image/'))
+}
+
+export async function readClipboardImageFiles() {
+  const clipboard = globalThis.navigator?.clipboard
+  if (!clipboard?.read) {
+    throw new Error('当前浏览器不支持读取剪贴板，请在笔记输入框按 Ctrl+V / ⌘V 粘贴图片')
+  }
+  try {
+    const items = await clipboard.read()
+    const files = []
+    for (const item of items) {
+      // 同一张图片可能有多个格式，只读取其中一个，避免重复添加。
+      const type = item.types.find((value) => ACCEPTED_IMAGE_TYPES.has(value))
+        || item.types.find((value) => value.startsWith('image/'))
+      if (!type) continue
+      const blob = await item.getType(type)
+      const extension = type === 'image/jpeg' ? 'jpg' : type.slice('image/'.length)
+      files.push(new File([blob], `clipboard-${Date.now()}-${files.length + 1}.${extension}`, { type }))
+    }
+    return files
+  } catch {
+    throw new Error('无法读取剪贴板，请允许浏览器访问，或在笔记输入框按 Ctrl+V / ⌘V 粘贴图片')
+  }
 }
 
 function fileToDataUrl(file) {

@@ -8,6 +8,7 @@ from fastapi.staticfiles import StaticFiles
 from . import auth, schema
 from .api import router
 from .upload import router as upload_router
+from .annotations import router as annotation_router
 from .config import DIST_DIR, DRAFTS_DIR, settings
 from .db import connect
 from . import llmconfig
@@ -44,6 +45,7 @@ async def _http_exc(request, exc: HTTPException):
 
 app.include_router(router)
 app.include_router(upload_router)
+app.include_router(annotation_router)
 app.mount('/drafts', StaticFiles(directory=str(DRAFTS_DIR)), name='drafts')
 
 # 生产单端口：前端 dist 由后端托管。必须最后注册——前面的 /api、/drafts、/u 先匹配，

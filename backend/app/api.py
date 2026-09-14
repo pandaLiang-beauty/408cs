@@ -6,7 +6,6 @@
 import base64
 import binascii
 import json
-import os
 import secrets
 from pathlib import Path
 from typing import List, Optional
@@ -15,8 +14,8 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
-from . import auth, grading, scheduler, llmconfig, upload, plan
-from .config import DRAFTS_DIR, NOTE_IMAGES_DIR
+from . import auth, grading, scheduler, llmconfig, upload, plan, exercises
+from .config import NOTE_IMAGES_DIR
 from .db import get_db
 
 router = APIRouter(prefix='/api')
@@ -29,19 +28,17 @@ def _to_public(row) -> dict:
         'id': row['id'], 'year': row['year'], 'subject': row['subject'], 'number': row['number'],
         'qtype': row['qtype'], 'source': row['source'], 'stem_html': row['stem_html'],
         'options': json.loads(row['options_json'] or '[]'), 'tags': row['tags'],
+        'source_url': row['source_url'],
+        'source_label': exercises.source_label(row['source'], row['year'], row['source_url']),
     }
 
 
-def _draft_url(path) -> str:
-    return ('/drafts/' + os.path.basename(path)) if path else ''
-
-
-def _item_public(si, q, graded: bool) -> dict:
+def _item_public(conn, si, q, graded: bool) -> dict:
     """一条做题记录对外形态；未交卷不泄露正确答案/参考答案。"""
     d = {
         'chosen': si['chosen'], 'fuzzy': bool(si['fuzzy']),
         'is_correct': si['is_correct'], 'result': si['result'],
-        'draft_url': _draft_url(si['draft_path']),
+        **upload.draft_state(conn, si['id']),
         'answer_text': si['answer_text'], 'verdict': si['verdict'], 'comment': si['comment'],
     }
     if graded:
@@ -55,7 +52,7 @@ def _session_payload(conn, sess) -> dict:
     graded = sess['status'] == 'graded'
     rows = conn.execute(
         'SELECT si.*, q.id qid, q.year, q.subject, q.number, q.qtype, q.source, q.stem_html,'
-        ' q.options_json, q.tags, q.answer, q.answer_html'
+        ' q.options_json, q.tags, q.answer, q.answer_html, q.source_url'
         ' FROM session_items si JOIN questions q ON q.id=si.question_id'
         ' WHERE si.session_id=? ORDER BY si.position', (sess['id'],)).fetchall()
     questions, items = [], {}
@@ -63,7 +60,7 @@ def _session_payload(conn, sess) -> dict:
         q = _to_public(r)
         q['id'] = r['qid']   # r['id'] 是 session_items.id；题目 id 取 q.id 的别名 qid
         questions.append(q)
-        items[r['qid']] = _item_public(r, r, graded)
+        items[r['qid']] = _item_public(conn, r, r, graded)
     return {'session_id': sess['id'], 'kind': sess['kind'], 'year': sess['year'],
             'status': sess['status'], 'questions': questions, 'items': items}
 
@@ -181,7 +178,7 @@ def _exam_question_ids(conn, year: int):
 
 
 def _reinforce_question_ids(conn, all_pool: bool):
-    """按薄弱知识点组强化卷：同知识点「新题优先」，穿插做错/模糊过的原题；最多 30 题。"""
+    """同知识点新题优先；经典练习优先于模拟和真题，保留尚未完成的模考卷。"""
     now = scheduler.now_iso()
     if all_pool:
         pts = conn.execute('SELECT tag FROM point_schedule ORDER BY due_at').fetchall()
@@ -190,19 +187,26 @@ def _reinforce_question_ids(conn, all_pool: bool):
                            (now,)).fetchall()
     if not pts:
         return []
+    cfg = conn.execute('SELECT mock_years FROM plan_config WHERE id=1').fetchone()
+    reserved = {int(year.strip()) for year in (cfg['mock_years'] if cfg else '2024,2025,2026').split(',') if year.strip().isdigit()}
+    completed_years = {r['year'] for r in conn.execute("SELECT DISTINCT year FROM sessions WHERE kind='exam' AND status='graded'")}
+    reserved -= completed_years
+    source_priority = {'exercise': 0, 'simulate': 1, 'exam': 2}
     recent_cut = scheduler.hours_ago_iso(12)  # 12h 内刚做过的先不重复
     per_point = {}
     for pt in pts:
         tag = pt['tag']
         rows = conn.execute(
-            'SELECT q.id, q.tags, COUNT(si.id) attempts, MAX(si.updated_at) last_done,'
+            'SELECT q.id, q.tags, q.source, q.year, COUNT(si.id) attempts, MAX(si.updated_at) last_done,'
             " MAX(CASE WHEN si.result IN ('wrong','fuzzy') THEN 1 ELSE 0 END) ever_missed"
             ' FROM questions q LEFT JOIN session_items si ON si.question_id=q.id'
             " WHERE q.qtype='choice' AND q.tags LIKE ?"
             ' GROUP BY q.id', (f'%{tag}%',)).fetchall()
         # LIKE 只是粗筛，再用精确 token 过滤，避免“二叉树”误配“二叉树遍历”
         rows = [r for r in rows if tag in scheduler.split_tags(r['tags'])]
+        rows = [r for r in rows if not (r['source'] == 'exam' and r['year'] in reserved)]
         rows = [r for r in rows if not (r['last_done'] and r['last_done'] > recent_cut)]
+        rows.sort(key=lambda r: (source_priority.get(r['source'], 3), r['id']))
         new = [r['id'] for r in rows if r['attempts'] == 0]
         missed = [r['id'] for r in rows if r['attempts'] and r['ever_missed']]
         others = [r['id'] for r in rows if r['attempts'] and not r['ever_missed']]
@@ -321,19 +325,9 @@ def submit(sid: int, conn=Depends(get_db), _=Depends(auth.require_user)):
 
 @router.post('/sessions/{sid}/draft')
 def save_draft(sid: int, body: DraftIn, conn=Depends(get_db), _=Depends(auth.require_user)):
-    """草稿纸（本机选图）：每场做题各存一份（文件名带 session）。"""
+    """草稿纸（本机选图）：为本题本次作答追加一张。"""
     _get_session(conn, sid)
-    it = conn.execute('SELECT id FROM session_items WHERE session_id=? AND question_id=?',
-                      (sid, body.question_id)).fetchone()
-    if not it:
-        raise HTTPException(status_code=404, detail='该题不在此卷中')
-    img = body.image_base64.split(',', 1)[1] if ',' in body.image_base64 else body.image_base64
-    fname = f's{sid}_q{body.question_id}.png'
-    (DRAFTS_DIR / fname).write_bytes(base64.b64decode(img))
-    conn.execute('UPDATE session_items SET draft_path=?,updated_at=? WHERE id=?',
-                 (fname, scheduler.now_iso(), it['id']))
-    conn.commit()
-    return {'ok': True, 'draft_url': '/drafts/' + fname}
+    return upload.save_draft_image(conn, sid, body.question_id, body.image_base64)
 
 
 @router.post('/sessions/{sid}/draft-token')
@@ -349,11 +343,11 @@ def draft_token(sid: int, body: DraftTokenIn, conn=Depends(get_db), _=Depends(au
 @router.get('/sessions/{sid}/draft')
 def get_draft(sid: int, question_id: int, conn=Depends(get_db), _=Depends(auth.require_user)):
     """轮询用：手机传完后电脑端据此刷新草稿缩略图。"""
-    it = conn.execute('SELECT draft_path, updated_at FROM session_items'
+    it = conn.execute('SELECT id, updated_at FROM session_items'
                       ' WHERE session_id=? AND question_id=?', (sid, question_id)).fetchone()
     if not it:
         raise HTTPException(status_code=404, detail='该题不在此卷中')
-    return {'draft_url': _draft_url(it['draft_path']), 'updated_at': it['updated_at']}
+    return {**upload.draft_state(conn, it['id']), 'updated_at': it['updated_at']}
 
 
 @router.post('/sessions/{sid}/grade_subjective')
@@ -611,7 +605,7 @@ def notebook(conn=Depends(get_db), _=Depends(auth.require_user)):
     """笔记库：所有笔记 + 所属题目信息，按题聚合返回。"""
     rows = conn.execute(
         'SELECT n.id, n.question_id, n.session_id, n.body, n.created_at, n.updated_at, q.id qid, q.year, q.number,'
-        ' q.subject, q.qtype, q.tags, q.stem_html'
+        ' q.subject, q.qtype, q.tags, q.stem_html, q.source, q.source_url'
         ' FROM notes n JOIN questions q ON q.id=n.question_id'
         ' ORDER BY q.year DESC, q.number, n.created_at').fetchall()
     groups = {}
@@ -619,6 +613,8 @@ def notebook(conn=Depends(get_db), _=Depends(auth.require_user)):
         g = groups.setdefault(r['qid'], {
             'question_id': r['qid'], 'year': r['year'], 'number': r['number'],
             'subject': r['subject'], 'qtype': r['qtype'], 'tags': r['tags'],
+            'source': r['source'], 'source_url': r['source_url'],
+            'source_label': exercises.source_label(r['source'], r['year'], r['source_url']),
             'stem_html': r['stem_html'], 'notes': []})
         g['notes'].append(_note_row(conn, r))
     return list(groups.values())

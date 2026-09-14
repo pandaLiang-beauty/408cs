@@ -27,6 +27,7 @@
             v-model="n.body"
             rows="3"
             aria-label="编辑笔记"
+            placeholder="编辑笔记，可按 Ctrl+V / ⌘V 粘贴图片"
             class="w-full resize-y rounded border border-transparent bg-transparent p-1 text-sm leading-6 outline-none focus:border-line focus:bg-white"
             @paste="onExistingPaste($event, n)"
             @blur="onEdit(n)"
@@ -40,12 +41,7 @@
           <div class="mt-1 flex items-center justify-between gap-2 text-[11px] text-muted">
             <span>{{ fmt(n.updated_at || n.created_at) }}</span>
             <div class="flex shrink-0 items-center gap-1">
-              <el-tooltip content="添加图片" placement="top">
-                <label class="note-toolbar-icon" aria-label="添加图片">
-                  <el-icon><Picture /></el-icon>
-                  <input type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple class="hidden" @change="onExistingFiles($event, n)" />
-                </label>
-              </el-tooltip>
+              <NoteImagePicker :disabled="uploadingNoteId !== null" @select="onExistingImages($event, n)" />
               <el-tooltip content="导出笔记 PNG" placement="top">
                 <button type="button" class="note-toolbar-icon" aria-label="导出笔记 PNG" @click="onExport(n)">
                   <el-icon><Download /></el-icon>
@@ -62,30 +58,28 @@
         <li v-if="!notes.length" class="py-6 text-center text-sm text-muted">还没有笔记，在下面写第一条。</li>
       </ul>
 
-      <div class="mt-2 border-t border-line pt-2">
+      <div :key="store.noteQid" class="mt-2 border-t border-line pt-2">
         <textarea
           v-model="draft"
           rows="3"
-          placeholder="新增一条笔记..."
+          aria-label="新增笔记"
+          placeholder="新增一条笔记，也可直接粘贴图片…"
+          :disabled="saving"
           class="w-full resize-y rounded-lg border border-line p-2 text-sm outline-none focus:border-primary"
           @paste="onDraftPaste"
         />
+        <p class="mt-1 text-[11px] text-muted">支持 Ctrl+V / ⌘V 粘贴图片，也可只添加图片。</p>
         <div v-if="pendingImages.length" class="note-pending-grid">
           <div v-for="(item, index) in pendingImages" :key="item.previewUrl" class="note-pending-item">
             <img :src="item.previewUrl" alt="待上传图片" />
-            <button type="button" :aria-label="`移除第 ${index + 1} 张图片`" title="移除图片" @click="removePending(index)">
+            <button type="button" :disabled="saving" :aria-label="`移除第 ${index + 1} 张图片`" title="移除图片" @click="removePending(index)">
               <el-icon><Close /></el-icon>
             </button>
           </div>
         </div>
         <div class="mt-1.5 flex items-center gap-2">
           <el-button type="primary" size="small" :loading="saving" :disabled="!canAdd" @click="onAdd">添加</el-button>
-          <el-tooltip content="添加图片" placement="top">
-            <label class="note-toolbar-icon" aria-label="添加图片">
-              <el-icon><Picture /></el-icon>
-              <input type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple class="hidden" @change="onDraftFiles" />
-            </label>
-          </el-tooltip>
+          <NoteImagePicker :disabled="saving" @select="addPending" />
           <span class="text-[11px] text-muted">{{ pendingImages.length }}/{{ NOTE_IMAGE_LIMIT }}</span>
           <el-button class="ml-auto" size="small" text @click="store.openNote(null)">关闭</el-button>
         </div>
@@ -96,10 +90,12 @@
 
 <script setup>
 import { ref, computed, watch, onUnmounted } from 'vue'
-import { Close, Delete, Download, Picture } from '@element-plus/icons-vue'
+import { Close, Delete, Download } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { usePaperStore } from '@/stores/paper'
 import NoteImageGallery from '@/components/NoteImageGallery.vue'
+import NoteImagePicker from '@/components/NoteImagePicker.vue'
+import { questionSource } from '@/utils/questionSource'
 import {
   listNotes, addNote, editNote, deleteNote, addNoteImages, deleteNoteImage,
 } from '@/api/cs408/quiz'
@@ -121,8 +117,7 @@ const canAdd = computed(() => !saving.value && (!!draft.value.trim() || pendingI
 const meta = computed(() => {
   const q = store.questions.find((item) => item.id === store.noteQid)
   if (!q) return ''
-  const origin = q.source === 'simulate' ? `模拟卷${q.year}` : `${q.year} 年真题`
-  return `${origin} 第 ${q.number} 题`
+  return `${questionSource(q)} 第 ${q.number} 题`
 })
 
 function fmt(value) {
@@ -135,6 +130,7 @@ function clearPending() {
 }
 
 function addPending(files) {
+  if (saving.value) return 0
   try {
     const currentBytes = pendingImages.value.reduce((sum, item) => sum + item.file.size, 0)
     const valid = validateNoteImageFiles(files, pendingImages.value.length, currentBytes)
@@ -151,12 +147,7 @@ function onDraftPaste(event) {
   if (!files.length) return
   event.preventDefault()
   const added = addPending(files)
-  if (added) ElMessage.success(`已粘贴 ${added} 张截图`)
-}
-
-function onDraftFiles(event) {
-  addPending(event.target.files)
-  event.target.value = ''
+  if (added) ElMessage.success(`已粘贴 ${added} 张图片`)
 }
 
 function removePending(index) {
@@ -169,36 +160,28 @@ async function uploadToNote(note, files) {
   const valid = validateNoteImageFiles(files, note.images?.length || 0, currentBytes)
   if (!valid.length) return
   const payload = await filesToNotePayload(valid)
-  Object.assign(note, await addNoteImages(note.id, payload))
+  const updated = await addNoteImages(note.id, payload)
+  note.images = updated.images
+  note.updated_at = updated.updated_at
 }
 
-async function onExistingPaste(event, note) {
+function onExistingPaste(event, note) {
   const files = clipboardImageFiles(event)
   if (!files.length) return
   event.preventDefault()
-  if (uploadingNoteId.value === note.id) return
+  return onExistingImages(files, note)
+}
+
+async function onExistingImages(files, note) {
+  if (!files.length || uploadingNoteId.value !== null) return
   uploadingNoteId.value = note.id
   try {
     await uploadToNote(note, files)
-    ElMessage.success(`已粘贴 ${files.length} 张截图`)
-  } catch (error) {
-    ElMessage.error(error?.response?.data?.error || error.message || '图片上传失败')
-  } finally {
-    uploadingNoteId.value = null
-  }
-}
-
-async function onExistingFiles(event, note) {
-  if (uploadingNoteId.value === note.id) return
-  uploadingNoteId.value = note.id
-  try {
-    await uploadToNote(note, event.target.files)
     ElMessage.success('图片已添加')
   } catch (error) {
     ElMessage.error(error?.response?.data?.error || error.message || '图片上传失败')
   } finally {
     uploadingNoteId.value = null
-    event.target.value = ''
   }
 }
 
