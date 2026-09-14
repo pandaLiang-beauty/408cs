@@ -1,3 +1,5 @@
+import { renderMarkdown } from '@/utils/markdown'
+
 const ACCEPTED_IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif'])
 
 export const NOTE_IMAGE_LIMIT = 8
@@ -84,27 +86,6 @@ export function releasePendingImages(items) {
   for (const item of items) URL.revokeObjectURL(item.previewUrl)
 }
 
-function wrapText(context, text, maxWidth) {
-  const lines = []
-  for (const paragraph of String(text || '').split('\n')) {
-    if (!paragraph) {
-      lines.push('')
-      continue
-    }
-    let line = ''
-    for (const char of paragraph) {
-      const candidate = line + char
-      if (line && context.measureText(candidate).width > maxWidth) {
-        lines.push(line)
-        line = char
-      } else {
-        line = candidate
-      }
-    }
-    lines.push(line)
-  }
-  return lines
-}
 
 async function loadCanvasImage(url) {
   const response = await fetch(url, { credentials: 'same-origin' })
@@ -133,81 +114,37 @@ function saveBlob(blob, filename) {
   setTimeout(() => URL.revokeObjectURL(url), 1000)
 }
 
-function canvasBlob(canvas) {
-  return new Promise((resolve, reject) => {
-    canvas.toBlob((blob) => blob ? resolve(blob) : reject(new Error('笔记图片生成失败')), 'image/png')
-  })
-}
-
 export async function exportNoteAsPng(note, contextLabel = '') {
-  const width = 1200
-  const padding = 72
-  const contentWidth = width - padding * 2
-  const lineHeight = 52
-  const probe = document.createElement('canvas').getContext('2d')
-  probe.font = '32px "Microsoft YaHei", sans-serif'
-  const lines = note.body ? wrapText(probe, note.body, contentWidth) : []
-  const loadedImages = await Promise.all((note.images || []).map((item) => loadCanvasImage(item.url)))
-  const imageLayouts = loadedImages.map(({ image }) => {
-    const scale = Math.min(1, contentWidth / image.naturalWidth, 900 / image.naturalHeight)
-    return { width: Math.round(image.naturalWidth * scale), height: Math.round(image.naturalHeight * scale) }
-  })
-
-  const textHeight = lines.length ? lines.length * lineHeight + 28 : 0
-  const imagesHeight = imageLayouts.reduce((sum, item) => sum + item.height + 30, 0)
-  const height = Math.max(460, 210 + textHeight + imagesHeight + 100)
-  if (height > 30000) {
-    loadedImages.forEach((item) => URL.revokeObjectURL(item.objectUrl))
-    throw new Error('笔记内容过长，无法生成单张图片')
-  }
-
-  const canvas = document.createElement('canvas')
-  canvas.width = width
-  canvas.height = height
-  const ctx = canvas.getContext('2d')
-  ctx.fillStyle = '#fdfdfb'
-  ctx.fillRect(0, 0, width, height)
-  ctx.fillStyle = '#b04a2f'
-  ctx.fillRect(0, 0, 18, height)
-
-  ctx.fillStyle = '#1c1a17'
-  ctx.font = 'bold 44px "Microsoft YaHei", sans-serif'
-  ctx.fillText('408 学习笔记', padding, 82)
-  ctx.fillStyle = '#6d675d'
-  ctx.font = '25px "Microsoft YaHei", sans-serif'
-  ctx.fillText(contextLabel || '题目笔记', padding, 128, contentWidth)
-  ctx.strokeStyle = '#ddd7cc'
-  ctx.lineWidth = 2
-  ctx.beginPath()
-  ctx.moveTo(padding, 158)
-  ctx.lineTo(width - padding, 158)
-  ctx.stroke()
-
-  let y = 215
-  ctx.fillStyle = '#1c1a17'
-  ctx.font = '32px "Microsoft YaHei", sans-serif'
-  for (const line of lines) {
-    ctx.fillText(line, padding, y)
-    y += lineHeight
-  }
-  if (lines.length) y += 12
-
+  const { toBlob } = await import('html-to-image')
+  const imageResults = await Promise.allSettled((note.images || []).map(item => loadCanvasImage(item.url)))
+  const loadedImages = imageResults.filter(result => result.status === 'fulfilled').map(result => result.value)
+  const root = document.createElement('section')
+  root.className = 'note-export'
+  root.style.cssText = 'position:fixed;left:-20000px;top:0'
+  root.setAttribute('aria-hidden', 'true')
   try {
-    loadedImages.forEach(({ image }, index) => {
-      const layout = imageLayouts[index]
-      ctx.fillStyle = '#ffffff'
-      ctx.fillRect(padding, y, layout.width, layout.height)
-      ctx.drawImage(image, padding, y, layout.width, layout.height)
-      ctx.strokeStyle = '#ddd7cc'
-      ctx.strokeRect(padding, y, layout.width, layout.height)
-      y += layout.height + 30
+    const failed = imageResults.find(result => result.status === 'rejected')
+    if (failed) throw failed.reason
+    root.innerHTML = '<h1 class="note-export-title">408 学习笔记</h1><p class="note-export-source"></p><div class="note-export-body markdown-content"></div><div class="note-export-images"></div><p class="note-export-time"></p>'
+    root.querySelector('.note-export-source').textContent = contextLabel || '题目笔记'
+    root.querySelector('.note-export-body').innerHTML = renderMarkdown(note.body)
+    root.querySelector('.note-export-time').textContent = String(note.updated_at || note.created_at || '').replace('T', ' ').slice(0, 16)
+    for (const { image } of loadedImages) root.querySelector('.note-export-images').appendChild(image)
+    document.body.appendChild(root)
+    await Promise.all([...root.querySelectorAll('img')].map(image => image.decode()))
+    // Force layout before waiting for the fonts used by this note's formulas.
+    root.getBoundingClientRect()
+    await document.fonts.ready
+    const height = Math.ceil(root.getBoundingClientRect().height)
+    if (height > 30000) throw new Error('笔记内容过长，无法生成单张图片')
+    const blob = await toBlob(root, {
+      pixelRatio: 1, width: 1200, height, backgroundColor: '#fdfdfb',
+      style: { position: 'static', left: 'auto', top: 'auto' },
     })
-    ctx.fillStyle = '#6d675d'
-    ctx.font = '22px "Microsoft YaHei", sans-serif'
-    const timestamp = String(note.updated_at || note.created_at || '').replace('T', ' ').slice(0, 16)
-    ctx.fillText(timestamp, padding, height - 52)
-    saveBlob(await canvasBlob(canvas), `408-note-${note.id}.png`)
+    if (!blob) throw new Error('笔记图片生成失败')
+    saveBlob(blob, '408-note-' + note.id + '.png')
   } finally {
-    loadedImages.forEach((item) => URL.revokeObjectURL(item.objectUrl))
+    root.remove()
+    loadedImages.forEach(item => URL.revokeObjectURL(item.objectUrl))
   }
 }

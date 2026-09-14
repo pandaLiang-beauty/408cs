@@ -108,8 +108,7 @@
               <span class="font-semibold">大题批改提示词（全局，所有档共用）</span>
               <button type="button" class="text-[12px] text-primary hover:underline" @click="resetPrompt">恢复默认</button>
             </div>
-            <textarea v-model="promptDraft" rows="10"
-                      class="resize-y rounded-lg border border-line p-2.5 font-mono text-[13px] leading-6 outline-none focus:border-primary" />
+            <MarkdownEditor v-model="promptDraft" :rows="10" aria-label="批改提示词" :disabled="savingPrompt" />
             <div class="flex items-center gap-2">
               <el-button type="primary" :loading="savingPrompt" @click="onSavePrompt">保存提示词</el-button>
               <span class="text-[12px] text-muted">与网关无关。打标签是一次性脚本，不在此配。</span>
@@ -124,6 +123,7 @@
 <script setup>
 import { ref, reactive, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import MarkdownEditor from '@/components/MarkdownEditor.vue'
 import {
   getLlmConfig, createLlmProfile, updateLlmProfile, deleteLlmProfile,
   setActiveLlmProfile, setGradePrompt, getLlmModels, testLlmProfile,

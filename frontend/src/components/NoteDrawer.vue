@@ -23,12 +23,12 @@
           v-loading="uploadingNoteId === n.id"
           class="mb-2 rounded-lg border border-line bg-[#faf8f4] p-2"
         >
-          <textarea
+          <MarkdownEditor
             v-model="n.body"
             rows="3"
             aria-label="编辑笔记"
+            start-preview
             placeholder="编辑笔记，可按 Ctrl+V / ⌘V 粘贴图片"
-            class="w-full resize-y rounded border border-transparent bg-transparent p-1 text-sm leading-6 outline-none focus:border-line focus:bg-white"
             @paste="onExistingPaste($event, n)"
             @blur="onEdit(n)"
           />
@@ -59,13 +59,12 @@
       </ul>
 
       <div :key="store.noteQid" class="mt-2 border-t border-line pt-2">
-        <textarea
+        <MarkdownEditor
           v-model="draft"
           rows="3"
           aria-label="新增笔记"
           placeholder="新增一条笔记，也可直接粘贴图片…"
           :disabled="saving"
-          class="w-full resize-y rounded-lg border border-line p-2 text-sm outline-none focus:border-primary"
           @paste="onDraftPaste"
         />
         <p class="mt-1 text-[11px] text-muted">支持 Ctrl+V / ⌘V 粘贴图片，也可只添加图片。</p>
@@ -95,6 +94,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { usePaperStore } from '@/stores/paper'
 import NoteImageGallery from '@/components/NoteImageGallery.vue'
 import NoteImagePicker from '@/components/NoteImagePicker.vue'
+import MarkdownEditor from '@/components/MarkdownEditor.vue'
 import { questionSource } from '@/utils/questionSource'
 import {
   listNotes, addNote, editNote, deleteNote, addNoteImages, deleteNoteImage,

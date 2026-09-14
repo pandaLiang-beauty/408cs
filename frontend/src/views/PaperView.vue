@@ -4,6 +4,7 @@
 
     <PaperAnnotations
       v-else :session-id="store.sessionId" :questions="store.questions" :graded="store.graded" :mode="store.mode"
+      :visible-question-ids="visibleQuestionIds"
       :render-key="`${page}:${store.graded}`" @locate="locateQuestion"
     >
       <Scorecard v-if="store.graded && store.summary" :summary="store.summary" />
@@ -178,6 +179,7 @@ const pages = computed(() => {
 
 const totalPages = computed(() => pages.value.length)
 const visibleGroups = computed(() => pages.value[Math.min(page.value, totalPages.value) - 1] || [])
+const visibleQuestionIds = computed(() => visibleGroups.value.flatMap(group => group.items.map(item => item.q.id)))
 
 function go(p) {
   if (p < 1 || p > totalPages.value) return

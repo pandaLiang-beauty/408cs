@@ -43,11 +43,11 @@
               class="rounded border border-line bg-[#faf8f4] px-2.5 py-1.5 text-sm leading-6"
             >
               <form v-if="editingId === n.id" @submit.prevent="saveEdit(n)">
-                <textarea
+                <MarkdownEditor
                   v-model="editBody"
                   rows="3"
                   aria-label="编辑笔记"
-                  class="w-full resize-y rounded border border-line bg-white p-1.5 text-sm leading-6 outline-none focus:border-primary"
+                  :disabled="savingNoteId === n.id"
                   placeholder="编辑笔记，可按 Ctrl+V / ⌘V 粘贴图片"
                   @paste="onPasteImage($event, n)"
                   @keydown.esc.prevent="cancelEdit"
@@ -76,7 +76,7 @@
                 </div>
               </form>
               <template v-else>
-                <div v-if="n.body" class="whitespace-pre-wrap">{{ n.body }}</div>
+                <MarkdownContent v-if="n.body" :source="n.body" />
                 <div class="mt-0.5 flex items-center justify-between gap-2 text-[11px] text-muted">
                   <span>{{ fmt(n.updated_at || n.created_at) }}</span>
                   <div class="flex shrink-0 items-center gap-1">
@@ -113,6 +113,8 @@ import { Download, Edit } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import NoteImageGallery from '@/components/NoteImageGallery.vue'
 import NoteImagePicker from '@/components/NoteImagePicker.vue'
+import MarkdownEditor from '@/components/MarkdownEditor.vue'
+import MarkdownContent from '@/components/MarkdownContent.vue'
 import { questionSource } from '@/utils/questionSource'
 import { addNoteImages, deleteNoteImage, editNote, getNotebook } from '@/api/cs408/quiz'
 import {

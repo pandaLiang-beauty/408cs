@@ -18,11 +18,15 @@
       <span data-annotation-region="stem" v-html="question.stem_html"></span>
     </div>
 
-    <textarea
+    <MarkdownContent v-if="result" :source="answerText || '未填写文字作答'" aria-label="我的作答" class="mt-3 rounded-lg border border-line bg-[#f6f4ef] p-3 text-sm" />
+    <MarkdownEditor
+      v-else
       v-model="answerText"
-      :disabled="loading || !!result"
+      :disabled="loading"
+      aria-label="主观题作答"
+      :rows="6"
       placeholder="在此写出你的作答（设计思想 / 步骤 / 关键代码要点…）；也可先在草稿纸手写、拍照上传，这里写要点让 AI 批改"
-      class="mt-3 min-h-32 w-full rounded-lg border border-line p-3 text-sm leading-6 outline-none focus:border-primary disabled:bg-[#f6f4ef]"
+      class="mt-3"
     />
 
     <div class="mt-2 flex flex-wrap items-center gap-2">
@@ -35,7 +39,7 @@
     <div v-if="result" class="mt-3 grid gap-3">
       <div class="rounded-lg border border-line bg-[#faf8f4] p-3 text-sm leading-6">
         <div class="mb-1 font-semibold text-muted">AI 点评</div>
-        <div>{{ result.comment }}</div>
+        <MarkdownContent :source="result.comment" />
       </div>
       <details class="rounded-lg border border-line bg-white p-3">
         <summary class="cursor-pointer text-sm font-semibold text-primary">查看参考答案</summary>
@@ -52,6 +56,8 @@ import { usePaperStore } from '@/stores/paper'
 import { gradeSubjective } from '@/api/cs408/quiz'
 import { questionSource } from '@/utils/questionSource'
 import QuestionAnnotationButton from './QuestionAnnotationButton.vue'
+import MarkdownEditor from '@/components/MarkdownEditor.vue'
+import MarkdownContent from '@/components/MarkdownContent.vue'
 
 const props = defineProps({
   question: { type: Object, required: true },

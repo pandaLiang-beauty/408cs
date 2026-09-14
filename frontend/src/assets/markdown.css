@@ -1,0 +1,45 @@
+.markdown-content { overflow-wrap: anywhere; color: inherit; font-size: inherit; line-height: 1.85; }
+.markdown-content > :first-child { margin-top: 0; }
+.markdown-content > :last-child { margin-bottom: 0; }
+.markdown-content p { margin: .6em 0; }
+.markdown-content h1, .markdown-content h2, .markdown-content h3,
+.markdown-content h4, .markdown-content h5, .markdown-content h6 { margin: 1em 0 .5em; font-weight: 700; line-height: 1.5; }
+.markdown-content h1 { font-size: 1.6em; }.markdown-content h2 { font-size: 1.35em; }.markdown-content h3 { font-size: 1.15em; }
+.markdown-content strong { font-weight: 700; }.markdown-content em { font-style: italic; }
+.markdown-content mark { padding: 0 .12em; border-radius: 2px; background: #ffe88f; color: inherit; box-decoration-break: clone; }
+.markdown-content ul, .markdown-content ol { margin: .6em 0; padding-left: 1.6em; }
+.markdown-content ul { list-style: disc; }.markdown-content ol { list-style: decimal; }
+.markdown-content li { margin: .2em 0; }.markdown-content li > ul, .markdown-content li > ol { margin: .2em 0; }
+.markdown-content .task-list-item { list-style: none; }.markdown-content .task-list-item-checkbox { margin-right: .45em; accent-color: #b04a2f; }
+.markdown-content blockquote { margin: .7em 0; border-left: 3px solid #cbb398; padding: .2em .8em; color: #756250; background: #f5f0e8; }
+.markdown-content a { color: #a6452e; text-decoration: underline; text-underline-offset: 3px; }
+.markdown-content code { padding: .1em .3em; border-radius: 3px; background: #eee8df; font-family: Consolas, 'Liberation Mono', monospace; font-size: .9em; }
+.markdown-content pre { margin: .8em 0; padding: .8em 1em; border: 1px solid #e0d6c8; border-radius: 5px; background: #f4f0e9; white-space: pre-wrap; }
+.markdown-content pre code { padding: 0; background: transparent; line-height: 1.6; }
+.markdown-content table { width: 100%; border-collapse: collapse; margin: .8em 0; font-size: .95em; }
+.markdown-content th, .markdown-content td { border: 1px solid #d7cfc2; padding: .35em .6em; text-align: left; }
+.markdown-content th { font-weight: 600; background: #f3eee5; }
+.markdown-content img { max-width: 100%; height: auto; border-radius: 3px; }
+.markdown-content hr { margin: 1em 0; border: 0; border-top: 1px solid #ddd7cc; }
+.markdown-content .katex-display { padding: 2px 0; }.markdown-content .katex-display > .katex { white-space: normal; }
+
+.markdown-editor { width: 100%; min-width: 0; overflow: hidden; border: 1px solid #ddd7cc; border-radius: 6px; background: #fffdf9; }
+.markdown-editor:focus-within { border-color: #b87961; }
+.markdown-editor-toolbar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 4px 8px;
+  min-height: 33px; padding: 4px 7px; border-bottom: 1px solid #e8e0d5; background: #f7f3ed; }
+.markdown-editor-toolbar > span { color: #8b7c6d; font-size: 10px; }
+.markdown-editor-modes { display: flex; gap: 3px; }
+.markdown-editor-modes button { padding: 3px 8px; border-radius: 3px; color: #867464; font-size: 11px; cursor: pointer; }
+.markdown-editor-modes button[aria-pressed='true'] { background: #fff; color: #a44831; box-shadow: 0 1px 3px #33231312; }
+.markdown-editor-input { display: block; width: 100%; min-height: 92px; resize: vertical; padding: 10px 12px; border: 0;
+  outline: none; background: #fffdf9; font: 13px/1.85 Consolas, 'Microsoft YaHei', monospace; color: #342d25; }
+.markdown-editor-input:disabled { background: #f2eee7; }
+.markdown-editor-preview { min-height: 92px; padding: 10px 12px; font-size: 13px; }
+
+.note-export { box-sizing: border-box; width: 1200px; min-height: 460px; padding: 56px 72px 44px; border-left: 18px solid #b04a2f;
+  background: #fdfdfb; color: #1c1a17; font: 30px/1.8 'Microsoft YaHei', sans-serif; }
+.note-export-title { margin: 0 0 8px; font-size: 44px; font-weight: 700; }
+.note-export-source { margin: 0 0 30px; padding-bottom: 24px; border-bottom: 2px solid #ddd7cc; font-size: 25px; color: #6d675d; }
+.note-export-images { display: flex; flex-direction: column; align-items: flex-start; gap: 30px; margin-top: 30px; }
+.note-export-images img { max-width: 100%; max-height: 900px; object-fit: contain; border: 1px solid #ddd7cc; }
+.note-export-time { margin: 36px 0 0; font-size: 22px; color: #6d675d; }

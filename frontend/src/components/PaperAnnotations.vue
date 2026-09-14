@@ -14,47 +14,58 @@
 
     <aside v-if="graded && panelOpen" class="annotation-sidebar" aria-label="试卷复盘批注">
       <header class="annotation-sidebar-header">
-        <div><strong>复盘批注 <span>{{ records.length }}</span></strong><p>保存在本次作答中</p></div>
+        <div><strong>复盘批注 <span>{{ records.length }}</span></strong><p>本页 {{ visibleRecords.length }} 条 · 随题目排列</p></div>
         <button type="button" class="annotation-close" aria-label="收起批注边栏" @click="panelOpen = false"><Close /></button>
       </header>
-      <div class="annotation-list" @scroll.passive="scheduleLayout">
+      <label v-if="sortedRecords.length" class="annotation-index">
+        定位批注
+        <select aria-label="定位批注题目" @change="jumpToAnnotatedQuestion">
+          <option value="">选择题目…</option>
+          <option v-for="item in annotatedQuestions" :key="item.id" :value="item.id">{{ item.label }}</option>
+        </select>
+      </label>
+      <button v-if="draft && !visibleIds.has(draft.question_id)" type="button" class="annotation-resume" @click="focusComposer">
+        继续编辑 {{ label(draft) }} →
+      </button>
+      <div ref="annotationList" class="annotation-list" :style="{ height: sidebarLayout.height + 'px' }">
         <p v-if="loading" class="annotation-empty" role="status">正在读取批注…</p>
         <div v-if="loadError" class="annotation-error" role="alert">{{ loadError }} <button type="button" @click="loadRecords">重试</button></div>
-
-        <form v-if="draft" class="annotation-composer" @submit.prevent="saveDraft">
-          <div class="annotation-card-heading"><strong>{{ draft.id ? '编辑批注' : '新批注' }}</strong><span>{{ label(draft) }}</span></div>
-          <blockquote v-if="draft.quote">{{ draft.quote }}</blockquote>
-          <textarea
-            ref="editor" v-model="draft.body" aria-label="批注内容" placeholder="写下你的疑问、思路或易错点…"
-            rows="4" maxlength="5000" :disabled="saving" @keydown.ctrl.enter.prevent="saveDraft" @keydown.meta.enter.prevent="saveDraft"
-          />
-          <p v-if="saveError" class="annotation-error" role="alert">{{ saveError }}</p>
-          <div class="annotation-editor-actions">
-            <button type="submit" class="annotation-save" :disabled="saving || !draft.body.trim()">{{ saving ? '保存中…' : '保存批注' }}</button>
-            <button type="button" :disabled="saving" @click="cancelDraft">取消</button>
-          </div>
-          <p class="annotation-draft-hint">{{ storageFailed ? '请保存后再离开页面' : '未保存的草稿会在此浏览器保留' }} · Ctrl / ⌘ + Enter 保存</p>
-        </form>
-
-        <p v-if="!loading && !loadError && !records.length && !draft" class="annotation-empty">
-          选中文字后点击「添加批注」，也可以点击题号旁的「批注」，记录整题想法。
+        <p v-if="!loading && !loadError && !sidebarEntries.length" class="annotation-empty">
+          {{ records.length ? '本页暂无批注，可从上方定位其他题目的批注。' : '选中文字或点击题号旁的「批注」，记录想法。' }}
         </p>
-        <article
-          v-for="record in sortedRecords" :key="record.id" :data-comment-id="record.id"
-          class="annotation-card" :class="{ 'annotation-card-active': activeId === record.id, 'annotation-card-resolved': record.resolved }"
-        >
-          <div class="annotation-card-heading"><span class="annotation-avatar">我</span><strong>{{ label(record) }}</strong><time>{{ formatTime(record.updated_at) }}</time></div>
-          <button type="button" class="annotation-quote" :aria-label="`定位原文：${label(record)}`" @click="activate(record)">
-            <blockquote v-if="record.quote">{{ record.quote }}</blockquote><span v-else>查看本题 ↗</span>
-          </button>
-          <p class="annotation-body">{{ record.body }}</p>
-          <div class="annotation-card-actions">
-            <span v-if="record.resolved" class="annotation-resolved-label">✓ 已解决</span>
-            <button type="button" :disabled="busyId === record.id" @click="setResolved(record)">{{ record.resolved ? '重新打开' : '标为已解决' }}</button>
-            <button type="button" :disabled="busyId === record.id || saving" @click="openComposer(record)">编辑</button>
-            <button type="button" :disabled="busyId === record.id || saving" @click="remove(record)">删除</button>
-          </div>
-        </article>
+
+        <div v-for="entry in sidebarEntries" :key="entry.key" :data-annotation-entry="entry.key"
+             class="annotation-entry" :style="entryStyle(entry.key)">
+          <form v-if="entry.isDraft" class="annotation-composer" @submit.prevent="saveDraft">
+            <div class="annotation-card-heading"><strong>{{ draft.id ? '编辑批注' : '新批注' }}</strong><span>{{ label(draft) }}</span></div>
+            <blockquote v-if="draft.quote" class="annotation-source-quote">{{ draft.quote }}</blockquote>
+            <MarkdownEditor
+              ref="editor" v-model="draft.body" aria-label="批注内容" placeholder="写下你的疑问、思路或易错点…"
+              :rows="4" :maxlength="5000" :disabled="saving" @keydown.ctrl.enter.prevent="saveDraft" @keydown.meta.enter.prevent="saveDraft"
+            />
+            <p v-if="saveError" class="annotation-error" role="alert">{{ saveError }}</p>
+            <div class="annotation-editor-actions">
+              <button type="submit" class="annotation-save" :disabled="saving || !draft.body.trim()">{{ saving ? '保存中…' : '保存批注' }}</button>
+              <button type="button" :disabled="saving" @click="cancelDraft">取消</button>
+            </div>
+            <p class="annotation-draft-hint">{{ storageFailed ? '请保存后再离开页面' : '未保存的草稿会在此浏览器保留' }} · Ctrl / ⌘ + Enter 保存</p>
+          </form>
+
+          <article v-else :data-comment-id="entry.record.id" class="annotation-card"
+                   :class="{ 'annotation-card-active': activeId === entry.record.id, 'annotation-card-resolved': entry.record.resolved }">
+            <div class="annotation-card-heading"><span class="annotation-avatar">我</span><strong>{{ label(entry.record) }}</strong><time>{{ formatTime(entry.record.updated_at) }}</time></div>
+            <button type="button" class="annotation-quote" :aria-label="'定位原文：' + label(entry.record)" @click="activate(entry.record)">
+              <blockquote v-if="entry.record.quote" class="annotation-source-quote">{{ entry.record.quote }}</blockquote><span v-else>查看本题 ↗</span>
+            </button>
+            <MarkdownContent class="annotation-body" :source="entry.record.body" />
+            <div class="annotation-card-actions">
+              <span v-if="entry.record.resolved" class="annotation-resolved-label">✓ 已解决</span>
+              <button type="button" :disabled="busyId === entry.record.id" @click="setResolved(entry.record)">{{ entry.record.resolved ? '重新打开' : '标为已解决' }}</button>
+              <button type="button" :disabled="busyId === entry.record.id || saving" @click="openComposer(entry.record)">编辑</button>
+              <button type="button" :disabled="busyId === entry.record.id || saving" @click="remove(entry.record)">删除</button>
+            </div>
+          </article>
+        </div>
       </div>
     </aside>
 
@@ -74,12 +85,17 @@ import { ChatLineSquare, Close } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { addAnnotation, deleteAnnotation, editAnnotation, listAnnotations } from '@/api/cs408/quiz'
 import { PAPER_ANNOTATIONS, clearHighlights, paintHighlights, pointInRange, rangeForAnchor, regionElement, selectionAnchor } from '@/utils/annotationAnchors'
+import { placeAnnotations } from '@/utils/annotationLayout'
+import MarkdownEditor from '@/components/MarkdownEditor.vue'
+import MarkdownContent from '@/components/MarkdownContent.vue'
 
-const props = defineProps({ sessionId: Number, questions: { type: Array, default: () => [] }, mode: String, graded: Boolean, renderKey: [String, Number] })
+const props = defineProps({ sessionId: Number, questions: { type: Array, default: () => [] }, visibleQuestionIds: { type: Array, default: null }, mode: String, graded: Boolean, renderKey: [String, Number] })
 const emit = defineEmits(['locate'])
 const workspace = ref(null)
 const paperContent = ref(null)
 const editor = ref(null)
+const annotationList = ref(null)
+const sidebarLayout = ref({ positions: {}, height: 120 })
 const panelOpen = ref(props.graded)
 const records = ref([])
 const loading = ref(false)
@@ -96,6 +112,7 @@ const connector = ref('')
 let ranges = new Map()
 let observer
 let resizeObserver
+const observedElements = new Set()
 let paintFrame = 0
 let layoutFrame = 0
 let loadEpoch = 0
@@ -104,6 +121,18 @@ let disposed = false
 const positions = computed(() => new Map(props.questions.map((q, i) => [q.id, i])))
 const sortedRecords = computed(() => [...records.value].sort((a, b) =>
   (positions.value.get(a.question_id) ?? 9999) - (positions.value.get(b.question_id) ?? 9999) || a.id - b.id))
+const visibleIds = computed(() => new Set(props.visibleQuestionIds || props.questions.map(q => q.id)))
+const visibleRecords = computed(() => sortedRecords.value.filter(record => visibleIds.value.has(record.question_id)))
+const sidebarEntries = computed(() => {
+  const entries = visibleRecords.value.filter(record => record.id !== draft.value?.id)
+    .map(record => ({ key: 'record-' + record.id, record, isDraft: false }))
+  if (draft.value && visibleIds.value.has(draft.value.question_id)) entries.push({ key: 'draft', record: draft.value, isDraft: true })
+  return entries.sort((a, b) => (positions.value.get(a.record.question_id) ?? 9999) - (positions.value.get(b.record.question_id) ?? 9999)
+    || (a.record.id ?? Infinity) - (b.record.id ?? Infinity))
+})
+const annotatedQuestions = computed(() => [...new Set(sortedRecords.value.map(record => record.question_id))].map(id => ({
+  id, label: label({ question_id: id, region: 'question' }) + ' · ' + records.value.filter(record => record.question_id === id).length + '条',
+})))
 const message = (error, fallback) => error?.response?.data?.error || fallback
 const storageKey = sid => `cs408:annotation-draft:${sid}`
 
@@ -160,13 +189,34 @@ function discardStoredDraft(sid) {
   try { localStorage.removeItem(storageKey(sid)) } catch { storageFailed.value = true }
 }
 
+async function focusComposer() {
+  if (!draft.value) return
+  emit('locate', draft.value.question_id)
+  panelOpen.value = true
+  await nextTick()
+  updateLayout()
+  await nextTick()
+  // Template refs inside v-for are arrays, even with only one composer.
+  await (Array.isArray(editor.value) ? editor.value[0] : editor.value)?.focus({ preventScroll: true })
+  workspace.value?.querySelector('[data-annotation-entry="draft"]')?.scrollIntoView({ block: 'nearest' })
+}
+
+function jumpToAnnotatedQuestion(event) {
+  const record = sortedRecords.value.find(record => record.question_id === Number(event.target.value))
+  event.target.value = ''
+  if (record) void activate(record)
+}
+
+function entryStyle(key) {
+  const top = sidebarLayout.value.positions[key]
+  return top === undefined ? { visibility: 'hidden' } : { top: top + 'px' }
+}
+
 async function openComposer(anchor) {
   if (!props.graded || !anchor || saving.value) return
   if (draft.value && (draft.value.body.trim() || draft.value.id)) {
     ElMessage.info('请先保存或取消正在编辑的批注')
-    panelOpen.value = true
-    await nextTick()
-    editor.value?.focus({ preventScroll: true })
+    await focusComposer()
     return
   }
   draft.value = { ...anchor, session_id: props.sessionId, body: anchor.id ? anchor.body : '', client_id: anchor.client_id || globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}` }
@@ -175,9 +225,7 @@ async function openComposer(anchor) {
   panelOpen.value = true
   pendingSelection.value = null
   window.getSelection()?.removeAllRanges()
-  await nextTick()
-  editor.value?.focus({ preventScroll: true })
-  editor.value?.scrollIntoView({ block: 'nearest' })
+  await focusComposer()
 }
 
 function cancelDraft() {
@@ -253,8 +301,6 @@ async function activate(record) {
   const rect = range?.getBoundingClientRect() || target.getBoundingClientRect()
   if (!range && record.region !== 'question') ElMessage.info('原文位置有变化，已定位到对应题目；批注内容仍保留')
   window.scrollBy({ top: rect.top - window.innerHeight * 0.3, behavior: 'smooth' })
-  workspace.value?.querySelector(`[data-comment-id="${record.id}"]`)?.scrollIntoView({ block: 'nearest' })
-  if (window.innerWidth < 1180) panelOpen.value = false
   schedulePaint()
 }
 
@@ -287,6 +333,20 @@ function onPointerUp(event) {
 function updateLayout() {
   layoutFrame = 0
   if (disposed) return
+  if (annotationList.value && props.graded && panelOpen.value) {
+    const base = annotationList.value.getBoundingClientRect()
+    const entries = sidebarEntries.value.flatMap(entry => {
+      const question = regionElement(paperContent.value, { question_id: entry.record.question_id, region: 'question' })
+      const card = annotationList.value.querySelector(`[data-annotation-entry="${entry.key}"]`)
+      return question && card ? [{ key: entry.key, anchorTop: question.getBoundingClientRect().top - base.top, height: card.getBoundingClientRect().height }] : []
+    })
+    sidebarLayout.value = placeAnnotations(entries)
+  }
+  const targets = new Set([workspace.value, paperContent.value,
+    ...(paperContent.value?.querySelectorAll('[data-question-id]') || []),
+    ...(annotationList.value?.querySelectorAll('[data-annotation-entry]') || [])].filter(Boolean))
+  for (const node of observedElements) if (!targets.has(node)) { resizeObserver?.unobserve(node); observedElements.delete(node) }
+  for (const node of targets) if (!observedElements.has(node)) { resizeObserver?.observe(node); observedElements.add(node) }
   if (pendingSelection.value) {
     const range = rangeForAnchor(regionElement(paperContent.value, pendingSelection.value), pendingSelection.value)
     const rect = range?.getBoundingClientRect()
@@ -295,7 +355,7 @@ function updateLayout() {
     } else pendingSelection.value = null
   }
   connector.value = ''
-  if (!props.graded || !panelOpen.value || window.innerWidth < 1180 || !activeId.value || draft.value) return
+  if (!props.graded || !panelOpen.value || !activeId.value || draft.value) return
   const card = workspace.value?.querySelector(`[data-comment-id="${activeId.value}"]`)
   const from = ranges.get(activeId.value)?.getClientRects()?.[0]
   if (!card || !from?.width || from.bottom < 45 || from.top > innerHeight) return
@@ -326,6 +386,7 @@ function schedulePaint() {
 }
 
 watch([records, activeId, () => props.renderKey, panelOpen], () => nextTick(schedulePaint), { deep: true, flush: 'post' })
+watch(sidebarEntries, () => nextTick(scheduleLayout), { flush: 'post' })
 watch(() => draft.value ? [draft.value.question_id, draft.value.region, draft.value.quote, draft.value.start_offset, draft.value.end_offset].join('|') : '', schedulePaint)
 watch(() => props.graded, value => {
   if (value) { panelOpen.value = true; void loadRecords() }
@@ -337,7 +398,7 @@ onMounted(() => {
   observer = new MutationObserver(schedulePaint)
   observer.observe(paperContent.value, { subtree: true, childList: true, characterData: true })
   resizeObserver = new ResizeObserver(scheduleLayout)
-  resizeObserver.observe(workspace.value)
+  scheduleLayout()
   document.addEventListener('selectionchange', captureSelection)
   window.addEventListener('scroll', scheduleLayout, true)
   window.addEventListener('resize', scheduleLayout)
@@ -366,42 +427,35 @@ onBeforeUnmount(() => {
 .unsaved-dot { width: 6px; height: 6px; border-radius: 50%; background: #b8791d; }
 .annotation-workspace { position: relative; max-width: 820px; margin: auto; }
 .annotation-paper { min-width: 0; }
-.annotation-sidebar { border: 1px solid #d8cfc5; border-radius: 10px; background: #f8f6f2; display: flex; flex-direction: column; overflow: hidden; align-self: start; z-index: 5; }
-.annotation-sidebar-header { display: flex; justify-content: space-between; align-items: center; padding: 14px 16px; background: #fffdf9; border-bottom: 1px solid #e4ddd4; }
+.annotation-sidebar { position: relative; min-width: 0; align-self: start; z-index: 5; }
+.annotation-sidebar-header { display: flex; justify-content: space-between; align-items: center; padding: 14px 16px; background: #fffdf9; border: 1px solid #e4ddd4; border-radius: 8px; }
 .annotation-sidebar-header strong { font-size: 16px; }.annotation-sidebar-header strong span { margin-left: 6px; color: #9b8070; font-size: 13px; }
 .annotation-sidebar-header p { margin-top: 3px; color: #8b8074; font-size: 11px; }
 .annotation-close { border: 0; background: transparent; padding: 5px; color: #786b60; cursor: pointer; }.annotation-close svg { width: 18px; height: 18px; }
-.annotation-list { padding: 12px; overflow-y: auto; overscroll-behavior: contain; min-height: 0; }
+.annotation-index { display: flex; align-items: center; gap: 10px; margin: 12px 0; color: #827363; font-size: 12px; }
+.annotation-index select { flex: 1; min-width: 0; padding: 6px 8px; border: 1px solid #d8cfc5; border-radius: 5px; background: #fffdf9; color: #67584a; }
+.annotation-resume { margin: 8px 0; color: #a6452e; font-size: 12px; cursor: pointer; }
+.annotation-list { position: relative; margin-top: 12px; }
+.annotation-entry { position: absolute; left: 0; right: 0; }
 .annotation-empty { padding: 14px 5px; font-size: 13px; color: #8a7d6f; line-height: 1.9; }
-.annotation-card, .annotation-composer { border: 1px solid #e3dbd2; background: white; border-radius: 7px; padding: 12px; margin-bottom: 12px; overflow-wrap: anywhere; }
+.annotation-card, .annotation-composer { border: 1px solid #e3dbd2; background: #fffdf9; border-radius: 7px; padding: 12px; overflow-wrap: anywhere; }
 .annotation-card-active, .annotation-composer { border-color: #c76750; box-shadow: 0 0 0 1px #c767501a; }
 .annotation-card-resolved { background: #f5f6f2; }.annotation-card-resolved .annotation-body { color: #6b7264; }
 .annotation-card-heading { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 11px; color: #766759; }.annotation-card-heading strong { color: #4b4037; font-weight: 600; }.annotation-card-heading time { margin-left: auto; font-size: 10px; color: #8d847a; }
 .annotation-avatar { display: inline-flex; align-items: center; justify-content: center; background: #b4533c; color: white; border-radius: 50%; width: 22px; height: 22px; font-size: 11px; }
 .annotation-quote { display: block; text-align: left; width: 100%; margin-top: 9px; color: #967154; font-size: 12px; cursor: pointer; }.annotation-quote:hover { color: #b04a2f; }
-.annotation-sidebar blockquote { border-left: 2px solid #d4aa87; padding: 4px 8px; background: #faf5ee; color: #80654e; font-size: 12px; line-height: 1.65; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; white-space: pre-wrap; }
-.annotation-composer blockquote { margin: 10px 0; }
-.annotation-body { margin: 10px 0; white-space: pre-wrap; font-size: 13px; line-height: 1.8; color: #342f28; }
+.annotation-source-quote { border-left: 2px solid #d4aa87; padding: 4px 8px; background: #faf5ee; color: #80654e; font-size: 12px; line-height: 1.65; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; white-space: pre-wrap; }
+.annotation-composer .annotation-source-quote { margin: 10px 0; }
+.annotation-body { margin: 12px 0; font-size: 13px; line-height: 1.8; color: #342f28; }
 .annotation-card-actions, .annotation-editor-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; font-size: 11px; }.annotation-card-actions { padding-top: 9px; border-top: 1px solid #f0ebe4; justify-content: flex-end; }
 .annotation-card-actions button, .annotation-editor-actions button { cursor: pointer; color: #966851; }.annotation-card-actions button:hover { text-decoration: underline; }.annotation-sidebar button:disabled { opacity: .5; cursor: default; }
 .annotation-resolved-label { color: #6b845b; margin-right: auto; }
-.annotation-composer textarea { width: 100%; box-sizing: border-box; margin-top: 10px; min-height: 100px; resize: vertical; border: 1px solid #d8cfc5; border-radius: 5px; padding: 9px; font-size: 14px; line-height: 1.7; outline: none; background: white; }.annotation-composer textarea:focus { border-color: #b8664c; }
+.annotation-composer .markdown-editor { margin-top: 10px; }
 .annotation-editor-actions { margin-top: 8px; }.annotation-editor-actions .annotation-save { padding: 6px 10px; background: #b04a2f; color: white; border-radius: 5px; font-size: 12px; }
 .annotation-draft-hint { margin-top: 9px; font-size: 10px; line-height: 1.6; color: #958471; }
 .annotation-error { margin: 8px 0; font-size: 12px; color: #b63b2d; line-height: 1.7; }.annotation-error button { text-decoration: underline; cursor: pointer; }
 .annotation-connector { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; overflow: visible; z-index: 2; }.annotation-connector path { fill: none; stroke: #c86d55; stroke-width: 1; }
 .annotation-selection-toolbar { position: fixed; z-index: 2100; background: #fffdf9; border: 1px solid #cba995; border-radius: 7px; box-shadow: 0 4px 16px #35231824; }.annotation-selection-toolbar button { display: flex; gap: 6px; align-items: center; padding: 8px 12px; color: #9e432c; font-size: 13px; cursor: pointer; }
-@media (min-width: 1180px) {
-  .annotation-tools-wide, .annotation-workspace-open { max-width: 1164px; }
-  .annotation-workspace-open { display: grid; grid-template-columns: minmax(0, 820px) 320px; gap: 24px; }
-  .annotation-sidebar { position: sticky; top: 62px; max-height: calc(100vh - 82px); }
-}
-@media (max-width: 1179px) {
-  .annotation-sidebar { position: fixed; top: 60px; right: 12px; width: min(360px, calc(100vw - 24px)); max-height: calc(100dvh - 80px); box-shadow: 0 10px 45px #36241830; z-index: 1800; }
-}
-@media (max-width: 600px) {
-  .annotation-tools > span { max-width: 190px; font-size: 11px; }
-  .annotation-sidebar { top: auto; left: 0; right: 0; bottom: 0; width: 100%; max-height: 70dvh; border-radius: 14px 14px 0 0; }
-  .annotation-composer textarea { font-size: 16px; }
-}
+.annotation-tools-wide, .annotation-workspace-open { max-width: 1164px; }
+.annotation-workspace-open { display: grid; grid-template-columns: minmax(0, 820px) 320px; gap: 24px; }
 </style>
