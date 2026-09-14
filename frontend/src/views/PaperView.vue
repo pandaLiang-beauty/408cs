@@ -9,7 +9,7 @@
     >
       <Scorecard v-if="store.graded && store.summary" :summary="store.summary" />
 
-      <div class="mx-auto max-w-[820px] rounded-md border border-line bg-paper px-10 py-8 shadow-lg max-sm:px-4">
+      <div class="paper-sheet mx-auto max-w-[820px] rounded-md border border-line bg-paper px-10 py-8 shadow-lg max-sm:px-4">
         <!-- 卷头：只在第一页出现完整卷头，后续页出简版页眉 -->
         <div v-if="page === 1" class="mb-2 border-b-2 border-ink pb-3.5 text-center">
           <h1 class="font-song text-2xl tracking-wide">{{ store.title }}</h1>

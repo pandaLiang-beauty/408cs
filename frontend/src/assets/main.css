@@ -61,8 +61,8 @@ body {
 
 [data-annotation-region] { user-select: text; -webkit-user-select: text; }
 ::highlight(cs408-comments) { background-color: #fff0ab; }
-::highlight(cs408-comment-active) { background-color: #f0bdba; text-decoration: underline #b95640; }
-::highlight(cs408-comment-draft) { background-color: #f0bdba; }
+::highlight(cs408-comment-active) { background-color: #f7dada; }
+::highlight(cs408-comment-draft) { background-color: #f7dada; }
 .annotation-mark { color: inherit; background: #fff0ab; }
-.annotation-mark-active { background: #f0bdba; text-decoration: underline #b95640; }
+.annotation-mark-active { background: #f7dada; }
 [data-active-question-annotation] { box-shadow: inset 3px 0 #c76750; }

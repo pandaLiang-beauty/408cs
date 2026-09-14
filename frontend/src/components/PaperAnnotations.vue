@@ -8,13 +8,13 @@
   </div>
 
   <div ref="workspace" class="annotation-workspace" :class="{ 'annotation-workspace-open': graded && panelOpen }">
-    <div ref="paperContent" class="annotation-paper" @pointerup.capture="onPointerUp">
+    <div ref="paperContent" class="annotation-paper" @pointerup.capture="onPointerUp" @toggle.capture="schedulePaint" @load.capture="schedulePaint">
       <slot />
     </div>
 
     <aside v-if="graded && panelOpen" class="annotation-sidebar" aria-label="试卷复盘批注">
       <header class="annotation-sidebar-header">
-        <div><strong>复盘批注 <span>{{ records.length }}</span></strong><p>本页 {{ visibleRecords.length }} 条 · 随题目排列</p></div>
+        <div><strong>批注 <span>{{ records.length }}</span></strong><p>本页 {{ visibleRecords.length }} 条 · 对应选中文字</p></div>
         <button type="button" class="annotation-close" aria-label="收起批注边栏" @click="panelOpen = false"><Close /></button>
       </header>
       <label v-if="sortedRecords.length" class="annotation-index">
@@ -37,8 +37,7 @@
         <div v-for="entry in sidebarEntries" :key="entry.key" :data-annotation-entry="entry.key"
              class="annotation-entry" :style="entryStyle(entry.key)">
           <form v-if="entry.isDraft" class="annotation-composer" @submit.prevent="saveDraft">
-            <div class="annotation-card-heading"><strong>{{ draft.id ? '编辑批注' : '新批注' }}</strong><span>{{ label(draft) }}</span></div>
-            <blockquote v-if="draft.quote" class="annotation-source-quote">{{ draft.quote }}</blockquote>
+            <div class="annotation-card-heading"><span class="annotation-avatar" aria-hidden="true">我</span><strong>{{ draft.id ? '编辑批注' : '新批注' }}</strong><span>{{ label(draft) }}</span></div>
             <MarkdownEditor
               ref="editor" v-model="draft.body" aria-label="批注内容" placeholder="写下你的疑问、思路或易错点…"
               :rows="4" :maxlength="5000" :disabled="saving" @keydown.ctrl.enter.prevent="saveDraft" @keydown.meta.enter.prevent="saveDraft"
@@ -51,18 +50,22 @@
             <p class="annotation-draft-hint">{{ storageFailed ? '请保存后再离开页面' : '未保存的草稿会在此浏览器保留' }} · Ctrl / ⌘ + Enter 保存</p>
           </form>
 
-          <article v-else :data-comment-id="entry.record.id" class="annotation-card"
-                   :class="{ 'annotation-card-active': activeId === entry.record.id, 'annotation-card-resolved': entry.record.resolved }">
-            <div class="annotation-card-heading"><span class="annotation-avatar">我</span><strong>{{ label(entry.record) }}</strong><time>{{ formatTime(entry.record.updated_at) }}</time></div>
-            <button type="button" class="annotation-quote" :aria-label="'定位原文：' + label(entry.record)" @click="activate(entry.record)">
-              <blockquote v-if="entry.record.quote" class="annotation-source-quote">{{ entry.record.quote }}</blockquote><span v-else>查看本题 ↗</span>
-            </button>
+          <article v-else :data-comment-id="entry.record.id" class="annotation-card" tabindex="0"
+                   :aria-label="label(entry.record) + '的批注'" :aria-current="activeId === entry.record.id ? 'true' : undefined"
+                   :class="{ 'annotation-card-active': !draft && activeId === entry.record.id, 'annotation-card-resolved': entry.record.resolved }"
+                   @click="selectComment(entry.record)" @focus="selectComment(entry.record)"
+                   @keydown.enter.self.prevent="selectComment(entry.record)" @keydown.space.self.prevent="selectComment(entry.record)">
+            <div class="annotation-card-heading">
+              <span class="annotation-avatar" aria-hidden="true">我</span>
+              <button type="button" class="annotation-location" :aria-label="'定位原文：' + label(entry.record)" :title="entry.record.quote || '定位到本题'" @click.stop="activate(entry.record)">{{ label(entry.record) }}</button>
+              <time>{{ formatTime(entry.record.updated_at) }}</time>
+            </div>
             <MarkdownContent class="annotation-body" :source="entry.record.body" />
             <div class="annotation-card-actions">
               <span v-if="entry.record.resolved" class="annotation-resolved-label">✓ 已解决</span>
-              <button type="button" :disabled="busyId === entry.record.id" @click="setResolved(entry.record)">{{ entry.record.resolved ? '重新打开' : '标为已解决' }}</button>
-              <button type="button" :disabled="busyId === entry.record.id || saving" @click="openComposer(entry.record)">编辑</button>
-              <button type="button" :disabled="busyId === entry.record.id || saving" @click="remove(entry.record)">删除</button>
+              <button type="button" :disabled="busyId === entry.record.id" @click.stop="setResolved(entry.record)">{{ entry.record.resolved ? '重新打开' : '标为已解决' }}</button>
+              <button type="button" :disabled="busyId === entry.record.id || saving" @click.stop="openComposer(entry.record)">编辑</button>
+              <button type="button" :disabled="busyId === entry.record.id || saving" @click.stop="remove(entry.record)">删除</button>
             </div>
           </article>
         </div>
@@ -194,11 +197,15 @@ async function focusComposer() {
   emit('locate', draft.value.question_id)
   panelOpen.value = true
   await nextTick()
+  revealRegion(draft.value)
   updateLayout()
   await nextTick()
   // Template refs inside v-for are arrays, even with only one composer.
   await (Array.isArray(editor.value) ? editor.value[0] : editor.value)?.focus({ preventScroll: true })
-  workspace.value?.querySelector('[data-annotation-entry="draft"]')?.scrollIntoView({ block: 'nearest' })
+  const rect = workspace.value?.querySelector('[data-annotation-entry="draft"]')?.getBoundingClientRect()
+  if (rect && (rect.top < 72 || rect.top > window.innerHeight - 140)) {
+    window.scrollBy({ top: rect.top - 120, behavior: 'smooth' })
+  }
 }
 
 function jumpToAnnotatedQuestion(event) {
@@ -285,22 +292,41 @@ async function remove(record) {
   finally { busyId.value = null }
 }
 
-async function activate(record) {
+function revealRegion(record) {
+  const details = regionElement(paperContent.value, record)?.closest('details')
+  if (details) details.open = true
+}
+
+function anchorLocation(record, key) {
+  const element = regionElement(paperContent.value, record)
+  const question = regionElement(paperContent.value, { ...record, region: 'question' })
+  if (!question) return null
+  const details = element?.closest('details')
+  if (details && !details.open) {
+    return { rect: (details.querySelector('summary') || details).getBoundingClientRect(), exact: false }
+  }
+  const cached = ranges.get(key === 'draft' ? 'draft' : record.id)
+  const range = cached && element?.contains(cached.startContainer) ? cached : rangeForAnchor(element, record)
+  const rect = [...(range?.getClientRects() || [])].find(rect => rect.width > 0 && rect.height > 0)
+  return { rect: rect || (element || question).getBoundingClientRect(), exact: !!rect }
+}
+
+function selectComment(record) {
+  if (!draft.value && activeId.value !== record.id) void activate(record, false)
+}
+
+async function activate(record, scroll = true) {
   activeId.value = record.id
   panelOpen.value = true
   emit('locate', record.question_id)
   await nextTick()
   await nextTick()
   if (disposed) return
-  const element = regionElement(paperContent.value, record)
-  const target = element || regionElement(paperContent.value, { ...record, region: 'question' })
-  if (!target) return
-  const details = element?.closest('details')
-  if (details) details.open = true
-  const range = rangeForAnchor(element, record)
-  const rect = range?.getBoundingClientRect() || target.getBoundingClientRect()
-  if (!range && record.region !== 'question') ElMessage.info('原文位置有变化，已定位到对应题目；批注内容仍保留')
-  window.scrollBy({ top: rect.top - window.innerHeight * 0.3, behavior: 'smooth' })
+  revealRegion(record)
+  const anchor = anchorLocation(record)
+  if (!anchor) return
+  if (!anchor.exact && record.region !== 'question') ElMessage.info('原文位置有变化，已定位到对应题目；批注内容仍保留')
+  if (scroll) window.scrollBy({ top: anchor.rect.top - window.innerHeight * 0.3, behavior: 'smooth' })
   schedulePaint()
 }
 
@@ -326,21 +352,40 @@ function onPointerUp(event) {
   captureSelection()
   if (!pendingSelection.value) {
     const found = hitAnnotation(event)
-    if (found) void activate(found)
+    if (found && !draft.value) void activate(found, false)
   }
 }
 
 function updateLayout() {
   layoutFrame = 0
   if (disposed) return
+  connector.value = ''
   if (annotationList.value && props.graded && panelOpen.value) {
     const base = annotationList.value.getBoundingClientRect()
+    const activeKey = draft.value ? 'draft' : 'record-' + activeId.value
     const entries = sidebarEntries.value.flatMap(entry => {
-      const question = regionElement(paperContent.value, { question_id: entry.record.question_id, region: 'question' })
+      const anchor = anchorLocation(entry.record, entry.key)
       const card = annotationList.value.querySelector(`[data-annotation-entry="${entry.key}"]`)
-      return question && card ? [{ key: entry.key, anchorTop: question.getBoundingClientRect().top - base.top, height: card.getBoundingClientRect().height }] : []
+      if (!anchor || !card) return []
+      const bounds = card.getBoundingClientRect()
+      const avatar = card.querySelector('.annotation-avatar').getBoundingClientRect()
+      const pinOffset = avatar.top + avatar.height / 2 - bounds.top
+      return [{ key: entry.key, anchorTop: anchor.rect.top - base.top - pinOffset, height: bounds.height,
+        anchor, pinOffset, left: bounds.left }]
     })
-    sidebarLayout.value = placeAnnotations(entries)
+    const layout = placeAnnotations(entries, 12, activeKey)
+    sidebarLayout.value = layout
+    const selected = entries.find(entry => entry.key === activeKey)
+    if (selected) {
+      const bounds = workspace.value.getBoundingClientRect()
+      const origin = { left: bounds.left + workspace.value.clientLeft, top: bounds.top + workspace.value.clientTop }
+      const x1 = selected.anchor.rect.left - origin.left
+      const y1 = selected.anchor.rect.top - origin.top
+      const x2 = selected.left - origin.left
+      const y2 = base.top - origin.top + layout.positions[selected.key] + selected.pinOffset
+      connector.value = Math.abs(y1 - y2) < 1 ? `M ${x1} ${y1} H ${x2}`
+        : `M ${x1} ${y1} H ${x2 - 14} V ${y2} H ${x2}`
+    }
   }
   const targets = new Set([workspace.value, paperContent.value,
     ...(paperContent.value?.querySelectorAll('[data-question-id]') || []),
@@ -354,19 +399,6 @@ function updateLayout() {
       toolbarStyle.value = { left: `${Math.max(8, Math.min(rect.left, window.innerWidth - 150))}px`, top: `${Math.min(rect.bottom + 8, window.innerHeight - 48)}px` }
     } else pendingSelection.value = null
   }
-  connector.value = ''
-  if (!props.graded || !panelOpen.value || !activeId.value || draft.value) return
-  const card = workspace.value?.querySelector(`[data-comment-id="${activeId.value}"]`)
-  const from = ranges.get(activeId.value)?.getClientRects()?.[0]
-  if (!card || !from?.width || from.bottom < 45 || from.top > innerHeight) return
-  const base = workspace.value.getBoundingClientRect()
-  const to = card.getBoundingClientRect()
-  const x1 = from.right - base.left + 3
-  const y1 = from.top - base.top - 2
-  const x2 = to.left - base.left
-  const y2 = to.top - base.top + 24
-  const middle = x2 - 12
-  connector.value = `M ${x1} ${y1} H ${middle} V ${y2} H ${x2}`
 }
 
 function scheduleLayout() {
@@ -427,35 +459,40 @@ onBeforeUnmount(() => {
 .unsaved-dot { width: 6px; height: 6px; border-radius: 50%; background: #b8791d; }
 .annotation-workspace { position: relative; max-width: 820px; margin: auto; }
 .annotation-paper { min-width: 0; }
-.annotation-sidebar { position: relative; min-width: 0; align-self: start; z-index: 5; }
-.annotation-sidebar-header { display: flex; justify-content: space-between; align-items: center; padding: 14px 16px; background: #fffdf9; border: 1px solid #e4ddd4; border-radius: 8px; }
-.annotation-sidebar-header strong { font-size: 16px; }.annotation-sidebar-header strong span { margin-left: 6px; color: #9b8070; font-size: 13px; }
-.annotation-sidebar-header p { margin-top: 3px; color: #8b8074; font-size: 11px; }
+.annotation-sidebar { position: relative; min-width: 0; align-self: stretch; border-left: 1px solid #d8d4ce; background: #fff; z-index: 5; }
+.annotation-sidebar-header { display: flex; justify-content: space-between; align-items: center; padding: 14px 16px 8px; }
+.annotation-sidebar-header strong { font-size: 14px; }.annotation-sidebar-header strong span { margin-left: 6px; color: #9b8070; font-size: 12px; }
+.annotation-sidebar-header p { margin-top: 3px; color: #8b8074; font-size: 10px; }
 .annotation-close { border: 0; background: transparent; padding: 5px; color: #786b60; cursor: pointer; }.annotation-close svg { width: 18px; height: 18px; }
-.annotation-index { display: flex; align-items: center; gap: 10px; margin: 12px 0; color: #827363; font-size: 12px; }
-.annotation-index select { flex: 1; min-width: 0; padding: 6px 8px; border: 1px solid #d8cfc5; border-radius: 5px; background: #fffdf9; color: #67584a; }
-.annotation-resume { margin: 8px 0; color: #a6452e; font-size: 12px; cursor: pointer; }
+.annotation-index { display: flex; align-items: center; gap: 10px; margin: 0 16px; color: #827363; font-size: 11px; }
+.annotation-index select { flex: 1; min-width: 0; padding: 4px 6px; border: 1px solid #e2ddd6; border-radius: 3px; background: #fff; color: #67584a; }
+.annotation-resume { margin: 8px 16px; color: #a6452e; font-size: 12px; cursor: pointer; }
 .annotation-list { position: relative; margin-top: 12px; }
 .annotation-entry { position: absolute; left: 0; right: 0; }
-.annotation-empty { padding: 14px 5px; font-size: 13px; color: #8a7d6f; line-height: 1.9; }
-.annotation-card, .annotation-composer { border: 1px solid #e3dbd2; background: #fffdf9; border-radius: 7px; padding: 12px; overflow-wrap: anywhere; }
-.annotation-card-active, .annotation-composer { border-color: #c76750; box-shadow: 0 0 0 1px #c767501a; }
-.annotation-card-resolved { background: #f5f6f2; }.annotation-card-resolved .annotation-body { color: #6b7264; }
-.annotation-card-heading { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 11px; color: #766759; }.annotation-card-heading strong { color: #4b4037; font-weight: 600; }.annotation-card-heading time { margin-left: auto; font-size: 10px; color: #8d847a; }
-.annotation-avatar { display: inline-flex; align-items: center; justify-content: center; background: #b4533c; color: white; border-radius: 50%; width: 22px; height: 22px; font-size: 11px; }
-.annotation-quote { display: block; text-align: left; width: 100%; margin-top: 9px; color: #967154; font-size: 12px; cursor: pointer; }.annotation-quote:hover { color: #b04a2f; }
-.annotation-source-quote { border-left: 2px solid #d4aa87; padding: 4px 8px; background: #faf5ee; color: #80654e; font-size: 12px; line-height: 1.65; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; white-space: pre-wrap; }
-.annotation-composer .annotation-source-quote { margin: 10px 0; }
-.annotation-body { margin: 12px 0; font-size: 13px; line-height: 1.8; color: #342f28; }
-.annotation-card-actions, .annotation-editor-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; font-size: 11px; }.annotation-card-actions { padding-top: 9px; border-top: 1px solid #f0ebe4; justify-content: flex-end; }
-.annotation-card-actions button, .annotation-editor-actions button { cursor: pointer; color: #966851; }.annotation-card-actions button:hover { text-decoration: underline; }.annotation-sidebar button:disabled { opacity: .5; cursor: default; }
+.annotation-empty { padding: 14px 16px; font-size: 13px; color: #8a7d6f; line-height: 1.9; }
+.annotation-card, .annotation-composer { border: 1px solid transparent; background: transparent; padding: 12px 16px; overflow-wrap: anywhere; outline: none; }
+.annotation-card { cursor: default; }.annotation-card:hover { border-color: #e3dfd8; }
+.annotation-card-active, .annotation-card-active:hover, .annotation-composer { border-color: #cf514b; background: #fff; }
+.annotation-card-resolved .annotation-body { color: #788171; }
+.annotation-card-heading { display: flex; align-items: center; gap: 8px; font-size: 11px; color: #766759; }
+.annotation-card-heading strong, .annotation-location { color: #342f28; font-weight: 600; font-size: 12px; }
+.annotation-location { text-align: left; cursor: pointer; }.annotation-location:hover { color: #b04a2f; }
+.annotation-card-heading time { margin-left: auto; white-space: nowrap; font-size: 10px; color: #8d847a; }
+.annotation-avatar { display: inline-flex; flex-shrink: 0; align-items: center; justify-content: center; background: #ca4945; color: white; border-radius: 50%; width: 30px; height: 30px; font-size: 12px; }
+.annotation-body { margin: 0 0 4px 38px; font-size: 14px; line-height: 1.8; color: #342f28; }
+.annotation-card-actions, .annotation-editor-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; font-size: 11px; }
+.annotation-card-actions { margin: 12px -16px -12px; padding: 8px 14px; border-top: 1px solid #e8e4df; justify-content: flex-end; visibility: hidden; }
+.annotation-card:hover .annotation-card-actions, .annotation-card:focus-within .annotation-card-actions, .annotation-card-active .annotation-card-actions { visibility: visible; }
+.annotation-card-actions button, .annotation-editor-actions button { cursor: pointer; color: #71665c; }.annotation-card-actions button:hover { color: #b04a2f; text-decoration: underline; }.annotation-sidebar button:disabled { opacity: .5; cursor: default; }
 .annotation-resolved-label { color: #6b845b; margin-right: auto; }
-.annotation-composer .markdown-editor { margin-top: 10px; }
+.annotation-composer .markdown-editor { margin-top: 12px; }
 .annotation-editor-actions { margin-top: 8px; }.annotation-editor-actions .annotation-save { padding: 6px 10px; background: #b04a2f; color: white; border-radius: 5px; font-size: 12px; }
 .annotation-draft-hint { margin-top: 9px; font-size: 10px; line-height: 1.6; color: #958471; }
 .annotation-error { margin: 8px 0; font-size: 12px; color: #b63b2d; line-height: 1.7; }.annotation-error button { text-decoration: underline; cursor: pointer; }
-.annotation-connector { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; overflow: visible; z-index: 2; }.annotation-connector path { fill: none; stroke: #c86d55; stroke-width: 1; }
+.annotation-connector { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; overflow: visible; z-index: 2; }.annotation-connector path { fill: none; stroke: #cf514b; stroke-width: 1; vector-effect: non-scaling-stroke; }
 .annotation-selection-toolbar { position: fixed; z-index: 2100; background: #fffdf9; border: 1px solid #cba995; border-radius: 7px; box-shadow: 0 4px 16px #35231824; }.annotation-selection-toolbar button { display: flex; gap: 6px; align-items: center; padding: 8px 12px; color: #9e432c; font-size: 13px; cursor: pointer; }
 .annotation-tools-wide, .annotation-workspace-open { max-width: 1164px; }
-.annotation-workspace-open { display: grid; grid-template-columns: minmax(0, 820px) 320px; gap: 24px; }
+.annotation-workspace-open { display: grid; grid-template-columns: minmax(0, 820px) 344px; border: 1px solid #d8d4ce; background: #fff; box-shadow: 0 3px 14px #30271b12; }
+.annotation-workspace-open .annotation-paper { padding-bottom: 20px; }
+.annotation-workspace-open :deep(.paper-sheet) { border: 0; border-radius: 0; background: #fff; box-shadow: none; }
 </style>
