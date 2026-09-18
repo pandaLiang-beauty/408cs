@@ -2,10 +2,18 @@
 配置来自 DB(llm_config)，调用方把 cfg 传进来；脚本无 DB 时用 cfg_from_settings() 走环境变量。"""
 import json
 import re
+import socket
+import urllib.error
 import urllib.request
 from typing import Optional
 
 from .config import settings
+
+GRADE_TIMEOUT = 120
+
+
+class GatewayError(RuntimeError):
+    """可直接展示给用户的网关错误，不包含请求凭据。"""
 
 SYSTEM_PROMPT = (
     '你是严格的考研408阅卷老师。批改步骤：先把【参考答案】拆成若干评分点（每个小问/关键步骤/代码实现各算一点），'
@@ -37,11 +45,37 @@ def _post(url, headers, body, timeout):
                                  headers={'Content-Type': 'application/json',
                                           'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json',
                                           **headers})
-    with urllib.request.urlopen(req, timeout=timeout) as r:
-        return json.loads(r.read().decode('utf-8'))
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return json.loads(r.read().decode('utf-8'))
+    except urllib.error.HTTPError as exc:
+        message, code = '', ''
+        try:
+            data = json.loads(exc.read())
+            error = data.get('error', {}) if isinstance(data, dict) else {}
+            if isinstance(error, dict):
+                message, code = error.get('message', ''), error.get('code', '')
+            elif isinstance(error, str):
+                message = error
+        except (ValueError, OSError):
+            pass
+        if code == 'model_disabled':
+            raise GatewayError('当前模型已被网关停用，请在「设置」中切换模型') from exc
+        message = message if isinstance(message, str) else ''
+        for name in ('Authorization', 'x-api-key'):
+            secret = headers.get(name, '').removeprefix('Bearer ')
+            if secret:
+                message = message.replace(secret, '[已隐藏]')
+        raise GatewayError(f'网关返回 HTTP {exc.code}' + (f'：{message[:400]}' if message else '，请稍后重试')) from exc
+    except (TimeoutError, socket.timeout) as exc:
+        raise GatewayError('等待 AI 响应超时，请稍后重试') from exc
+    except urllib.error.URLError as exc:
+        if isinstance(exc.reason, (TimeoutError, socket.timeout)):
+            raise GatewayError('连接 AI 网关超时，请稍后重试') from exc
+        raise GatewayError('无法连接 AI 网关，请稍后重试或检查网关地址') from exc
 
 
-def chat(cfg: dict, messages, temperature: Optional[float] = None, timeout: int = 120) -> str:
+def chat(cfg: dict, messages, temperature: Optional[float] = None, timeout: int = GRADE_TIMEOUT) -> str:
     """发一次对话补全，返回助手文本。按 cfg['api_format'] 适配请求/解析。网关常拒默认 UA，故带浏览器 UA。"""
     base = (cfg.get('base_url') or '').rstrip('/')
     model = cfg.get('model') or ''
@@ -111,7 +145,16 @@ def grade(cfg: dict, stem_html: str, reference_html: str, student: str) -> dict:
         {'role': 'system', 'content': cfg.get('grade_prompt') or SYSTEM_PROMPT},
         {'role': 'user', 'content': user_p},
     ])
-    return _extract_json(content) or {'verdict': '部分对', 'score_ratio': 0.5, 'comment': content[:200]}
+    result = _extract_json(content) if isinstance(content, str) else None
+    if not isinstance(result, dict):
+        raise GatewayError('AI 未返回有效评分，请重试')
+    ratio = result.get('score_ratio')
+    if (result.get('verdict') not in ('对', '部分对', '错')
+            or isinstance(ratio, bool) or not isinstance(ratio, (int, float))
+            or not 0 <= ratio <= 1
+            or not isinstance(result.get('comment'), str) or not result['comment'].strip()):
+        raise GatewayError('AI 返回的评分格式不完整，请重试')
+    return {key: result[key] for key in ('verdict', 'score_ratio', 'comment')}
 
 
 def list_models(cfg: dict, timeout: int = 30) -> list:

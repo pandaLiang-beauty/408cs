@@ -7,7 +7,7 @@
 - 后端：FastAPI + Uvicorn（`127.0.0.1:8408`）
 - 前端：Vue 3 + Vite（开发 `127.0.0.1:5408`）
 - 数据库：SQLite（`backend/data/study.db`）
-- 批改：vyceai `gpt-5.6-luna`（OpenAI 兼容接口）
+- 批改：可切换的 AI 网关（OpenAI / Anthropic / Responses 兼容格式，当前模型见「设置」）
 
 ## 安装
 

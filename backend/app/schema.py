@@ -62,6 +62,8 @@ CREATE TABLE IF NOT EXISTS session_items (
   draft_path  TEXT NOT NULL DEFAULT '',           -- 最近一张草稿（兼容旧数据）；完整列表在 draft_images
   answer_text TEXT NOT NULL DEFAULT '',           -- 大题：本次作答原文
   verdict     TEXT NOT NULL DEFAULT '',           -- 大题：AI 判定(对/部分对/错)
+  score_ratio REAL,                              -- 大题：得分比例，旧记录保留空值
+  grading_started_at TEXT,                        -- 大题：正在批改的请求，超时后可重试
   comment     TEXT NOT NULL DEFAULT '',           -- 大题：AI 点评
   updated_at  TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   UNIQUE(session_id, question_id)
@@ -220,6 +222,12 @@ def _pre_migrate(conn) -> None:
     # 旧版本没有日期唯一约束；并发加载首页时可能留下同一天的重复任务。
     # 只删除重复的排程关联，不会级联删除其绑定的做题记录。
     dedupe_daily_tasks(conn)
+    item_cols = {r[1] for r in conn.execute('PRAGMA table_info(session_items)')}
+    if item_cols:
+        if 'score_ratio' not in item_cols:
+            conn.execute('ALTER TABLE session_items ADD COLUMN score_ratio REAL')
+        if 'grading_started_at' not in item_cols:
+            conn.execute('ALTER TABLE session_items ADD COLUMN grading_started_at TEXT')
     has_q = conn.execute(
         "SELECT 1 FROM sqlite_master WHERE type='table' AND name='questions'").fetchone()
     if not has_q:

@@ -7,6 +7,7 @@ import base64
 import binascii
 import json
 import secrets
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import List, Optional
 
@@ -40,9 +41,11 @@ def _item_public(conn, si, q, graded: bool) -> dict:
         'is_correct': si['is_correct'], 'result': si['result'],
         **upload.draft_state(conn, si['id']),
         'answer_text': si['answer_text'], 'verdict': si['verdict'], 'comment': si['comment'],
+        'score_ratio': si['score_ratio'],
     }
     if graded:
         d['answer'] = q['answer']
+    if graded or si['verdict']:
         d['reference_html'] = q['answer_html']
     return d
 
@@ -357,31 +360,62 @@ def grade_subjective(sid: int, body: GradeIn, conn=Depends(get_db), _=Depends(au
     student = (body.answer_text or '').strip()
     if not student:
         raise HTTPException(status_code=400, detail='请先写出你的作答')
-    cfg = llmconfig.active_config(conn)
-    if not grading.configured(cfg):
-        raise HTTPException(status_code=500, detail='AI 未配置（去「设置」新建/选择一个可用的大模型档）')
     q = conn.execute("SELECT stem_html, answer_html FROM questions WHERE id=? AND qtype='subjective'",
                      (body.question_id,)).fetchone()
     if not q:
         raise HTTPException(status_code=404, detail='题目不存在或非大题')
-    it = conn.execute('SELECT id FROM session_items WHERE session_id=? AND question_id=?',
+    it = conn.execute('SELECT * FROM session_items WHERE session_id=? AND question_id=?',
                       (sid, body.question_id)).fetchone()
     if not it:
         raise HTTPException(status_code=404, detail='该题不在此卷中')
-    try:
-        j = grading.grade(cfg, q['stem_html'], q['answer_html'], student)
-    except Exception as e:
-        raise HTTPException(status_code=502, detail='AI 批改失败：' + str(e))
-    verdict = j.get('verdict', '部分对')
-    result = 'correct' if verdict == '对' else ('wrong' if verdict == '错' else 'fuzzy')
-    conn.execute('UPDATE session_items SET answer_text=?,verdict=?,comment=?,is_correct=?,result=?,updated_at=?'
-                 ' WHERE id=?',
-                 (student, verdict, j.get('comment', ''), 1 if verdict == '对' else 0, result,
-                  scheduler.now_iso(), it['id']))
-    scheduler.update(conn, body.question_id, result)
+
+    def saved_result(item):
+        return {'verdict': item['verdict'], 'score_ratio': item['score_ratio'],
+                'comment': item['comment'], 'reference_html': q['answer_html'],
+                'answer_text': item['answer_text']}
+
+    if it['verdict']:
+        return saved_result(it)
+
+    # 先保存本次作答并占用本题；网络等待期间不持有 SQLite 写锁。
+    # 过期占用可恢复，避免进程重启后永久卡在“批改中”。
+    started = scheduler.now_iso()
+    expired = (datetime.now(timezone.utc) - timedelta(seconds=grading.GRADE_TIMEOUT + 60)).isoformat()
+    claimed = conn.execute(
+        'UPDATE session_items SET answer_text=?,grading_started_at=?,updated_at=?'
+        " WHERE id=? AND verdict='' AND (grading_started_at IS NULL OR grading_started_at<?)",
+        (student, started, started, it['id'], expired)).rowcount
     conn.commit()
-    return {'verdict': verdict, 'score_ratio': j.get('score_ratio'),
-            'comment': j.get('comment', ''), 'reference_html': q['answer_html']}
+    if not claimed:
+        latest = conn.execute('SELECT * FROM session_items WHERE id=?', (it['id'],)).fetchone()
+        if latest['verdict']:
+            return saved_result(latest)
+        raise HTTPException(status_code=409, detail='该题正在 AI 批改中，请稍后重试以查看结果')
+    try:
+        cfg = llmconfig.active_config(conn)
+        if not grading.configured(cfg):
+            raise HTTPException(status_code=500, detail='AI 未配置（去「设置」新建/选择一个可用的大模型档）')
+        try:
+            j = grading.grade(cfg, q['stem_html'], q['answer_html'], student)
+        except Exception as e:
+            raise HTTPException(status_code=502, detail='AI 批改失败：' + str(e)) from e
+        verdict = j['verdict']
+        result = 'correct' if verdict == '对' else ('wrong' if verdict == '错' else 'fuzzy')
+        updated = conn.execute(
+            'UPDATE session_items SET verdict=?,score_ratio=?,comment=?,is_correct=?,result=?,updated_at=?'
+            " WHERE id=? AND verdict='' AND grading_started_at=?",
+            (verdict, j['score_ratio'], j['comment'], 1 if verdict == '对' else 0, result,
+             scheduler.now_iso(), it['id'], started)).rowcount
+        if not updated:
+            raise HTTPException(status_code=409, detail='本次批改已过期，请重试以查看最新结果')
+        scheduler.update(conn, body.question_id, result)
+        conn.commit()
+        return {**j, 'reference_html': q['answer_html'], 'answer_text': student}
+    finally:
+        conn.rollback()
+        conn.execute('UPDATE session_items SET grading_started_at=NULL WHERE id=? AND grading_started_at=?',
+                     (it['id'], started))
+        conn.commit()
 
 NOTE_IMAGE_LIMIT = 8
 NOTE_IMAGE_MAX_BYTES = 8 * 1024 * 1024

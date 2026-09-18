@@ -46,6 +46,11 @@ body {
 /* csgraduates 的图带 <div class=svg-container style=width:120%> 会撑破卷面(溢到灰底)。强制归位到卷宽，超宽则内部横向滚动。 */
 .qhtml .svg-wrapper { max-width: 100%; overflow-x: auto; }
 .qhtml .svg-container { width: 100% !important; max-width: 100%; }
+/* 参考答案由本系统的 <details> 控制展开；原站正文自带 display:none，须覆盖其隐藏样式。
+   原站的展开/收藏按钮依赖未引入的脚本，不在答案区展示。 */
+.qhtml[data-annotation-region="explanation"] .solution-detail { display: block !important; }
+.qhtml[data-annotation-region="explanation"] .quiz-actions,
+.qhtml[data-annotation-region="explanation"] .quiz-tag-container { display: none !important; }
 /* 兜底：万一再混入抓取的页面骨架(页脚/侧栏/悬浮工具条)，直接隐藏，别显示也别撑版 */
 .qhtml footer, .qhtml aside, .qhtml nav,
 .qhtml .fab-container, .qhtml .td-footer, .qhtml #fab-container { display: none !important; }

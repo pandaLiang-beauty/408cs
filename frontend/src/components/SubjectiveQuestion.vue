@@ -33,6 +33,7 @@
       <el-button type="primary" size="small" :loading="loading" :disabled="!answerText.trim() || !!result" @click="doGrade">
         {{ loading ? 'AI 批改中…' : 'AI 批改' }}
       </el-button>
+      <span v-if="loading" class="text-xs text-muted" role="status">AI 正在批改，请稍候，最长约 2 分钟</span>
       <span v-if="result" class="badge" :class="badgeClass">{{ result.verdict }} · 得分 {{ ratioText }}</span>
     </div>
 
@@ -53,7 +54,8 @@
 <script setup>
 import { ref, computed } from 'vue'
 import { usePaperStore } from '@/stores/paper'
-import { gradeSubjective } from '@/api/cs408/quiz'
+import { gradeSubjective, getSession } from '@/api/cs408/quiz'
+import { gradingErrorMessage } from '@/utils/gradingError'
 import { questionSource } from '@/utils/questionSource'
 import QuestionAnnotationButton from './QuestionAnnotationButton.vue'
 import MarkdownEditor from '@/components/MarkdownEditor.vue'
@@ -66,10 +68,13 @@ const props = defineProps({
 const store = usePaperStore()
 
 // 从本场做题记录恢复：已作答/已批改则回填
-const _it = store.items?.[props.question.id] || {}
-const answerText = ref(_it.answer_text || '')
+const item = computed(() => store.items?.[props.question.id] || {})
+const answerText = computed({
+  get: () => item.value.answer_text || '',
+  set: (value) => store.patchLocalItem(props.question.id, { answer_text: value }),
+})
 const loading = ref(false)
-const result = ref(_it.verdict ? { verdict: _it.verdict, comment: _it.comment, reference_html: _it.reference_html } : null)
+const result = computed(() => item.value.verdict ? item.value : null)
 const error = ref('')
 
 const mode = computed(() => store.mode)
@@ -92,15 +97,26 @@ async function doGrade() {
   }
   loading.value = true
   error.value = ''
+  const sid = store.sessionId
+  const qid = props.question.id
+  const student = answerText.value.trim()
+  const applyResult = (r) => {
+    if (store.sessionId === sid) store.patchLocalItem(qid, { answer_text: student, ...r })
+  }
   try {
-    const r = await gradeSubjective(store.sessionId, props.question.id, answerText.value.trim())
-    result.value = r
-    store.patchLocalItem(props.question.id, {
-      answer_text: answerText.value.trim(), verdict: r.verdict,
-      comment: r.comment, reference_html: r.reference_html,
-    })
+    applyResult(await gradeSubjective(sid, qid, student))
   } catch (e) {
-    error.value = e?.response?.data?.error || 'AI 批改失败，请确认后端与网关可用'
+    // 连接中断时后端可能已完成；恢复该题结果，不覆盖卷内其他未保存内容。
+    if (!e?.response || [409, 504, 524].includes(e.response.status)) {
+      try {
+        const saved = (await getSession(sid)).items?.[qid]
+        if (saved?.verdict) {
+          applyResult(saved)
+          return
+        }
+      } catch { /* 保留原始批改错误。 */ }
+    }
+    error.value = gradingErrorMessage(e)
   } finally {
     loading.value = false
   }

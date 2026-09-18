@@ -39,7 +39,8 @@ export const getDraftStatus = (sid, question_id) =>
 
 // 大题 AI 批改（写回本场记录）
 export const gradeSubjective = (sid, question_id, answer_text) =>
-  axiosInstance.post(`/sessions/${sid}/grade_subjective`, { question_id, answer_text })
+  // 后端允许 AI 等待 120 秒，额外留出传输和结果保存时间。
+  axiosInstance.post(`/sessions/${sid}/grade_subjective`, { question_id, answer_text }, { timeout: 135000 })
 
 // 笔记：一题多条 + 笔记库
 export const listNotes = (question_id) => axiosInstance.get('/notes', { params: { question_id } })
@@ -65,6 +66,6 @@ export const deleteLlmProfile = (id) => axiosInstance.delete(`/settings/llm/prof
 export const setActiveLlmProfile = (profile_id) => axiosInstance.put('/settings/llm/active', { profile_id })
 export const setGradePrompt = (grade_prompt) => axiosInstance.put('/settings/llm/prompt', { grade_prompt })
 export const getLlmModels = (profile_id) =>
-  axiosInstance.get('/settings/llm/models', { params: { profile_id } })
+  axiosInstance.get('/settings/llm/models', { params: { profile_id }, timeout: 40000 })
 export const testLlmProfile = (profile_id) =>
-  axiosInstance.post('/settings/llm/test', null, { params: { profile_id } })
+  axiosInstance.post('/settings/llm/test', null, { params: { profile_id }, timeout: 75000 })
