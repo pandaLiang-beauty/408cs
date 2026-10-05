@@ -39,3 +39,4 @@ backend/data/backups/
 backend/data/import_reports/
 backend/data/drafts/
 backend/data/note_images/
+backend/data/image_host/

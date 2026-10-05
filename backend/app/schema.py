@@ -118,6 +118,16 @@ CREATE TABLE IF NOT EXISTS note_images (
 );
 CREATE INDEX IF NOT EXISTS idx_note_image_note ON note_images(note_id, position, id);
 
+-- 独立图床：图片不依附笔记或批注，链接长期保留。
+CREATE TABLE IF NOT EXISTS hosted_images (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  stored_name   TEXT NOT NULL UNIQUE,
+  original_name TEXT NOT NULL,
+  mime_type     TEXT NOT NULL,
+  size_bytes    INTEGER NOT NULL,
+  created_at    TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE TABLE IF NOT EXISTS review_schedule (
   question_id INTEGER PRIMARY KEY REFERENCES questions(id) ON DELETE CASCADE,
   level       INTEGER NOT NULL DEFAULT 0,

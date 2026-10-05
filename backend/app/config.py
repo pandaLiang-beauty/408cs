@@ -6,6 +6,7 @@ BASE_DIR = Path(__file__).resolve().parents[1]   # .../cs408/backend
 DATA_DIR = BASE_DIR / 'data'
 DRAFTS_DIR = DATA_DIR / 'drafts'
 NOTE_IMAGES_DIR = DATA_DIR / 'note_images'
+IMAGE_HOST_DIR = DATA_DIR / 'image_host'
 RAW_DIR = DATA_DIR / 'raw'
 DB_PATH = DATA_DIR / 'study.db'
 # 生产单端口部署：后端直接托管前端构建产物（开发时由 Vite 提供，此目录不存在则跳过）。
@@ -42,3 +43,4 @@ settings = Settings()
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 DRAFTS_DIR.mkdir(parents=True, exist_ok=True)
 NOTE_IMAGES_DIR.mkdir(parents=True, exist_ok=True)
+IMAGE_HOST_DIR.mkdir(parents=True, exist_ok=True)

@@ -7,6 +7,7 @@ const routes = [
   { path: '/', name: 'home', component: () => import('@/views/HomeView.vue') },
   { path: '/paper', name: 'paper', component: () => import('@/views/PaperView.vue') },
   { path: '/notebook', name: 'notebook', component: () => import('@/views/NotebookView.vue') },
+  { path: '/images', redirect: { path: '/', query: { imageHost: '1' } } },
   { path: '/settings', name: 'settings', component: () => import('@/views/SettingsView.vue') },
   { path: '/:pathMatch(.*)*', redirect: '/' },
 ]
