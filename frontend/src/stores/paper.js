@@ -6,7 +6,7 @@ import { createAnswerSaveQueue } from './answerSaveQueue'
 // 一场做题（session）的完整状态与操作。答题即自动保存到后端，刷新可恢复。
 export const usePaperStore = defineStore('paper', () => {
   const sessionId = ref(null)
-  const mode = ref('exam') // exam | reinforce
+  const mode = ref('exam') // exam | reinforce | reinforce_subjective
   const year = ref(null)
   const title = ref('')
   const questions = ref([])
@@ -27,7 +27,8 @@ export const usePaperStore = defineStore('paper', () => {
   const saveError = computed(() => Object.values(saveErrors.value)[0] || '')
 
   function _title(kind, y) {
-    return kind === 'exam' ? `${y} 年 408 真题` : '强化训练卷'
+    if (kind === 'exam') return `${y} 年 408 真题`
+    return kind === 'reinforce_subjective' ? '大题强化卷' : '选择题强化卷'
   }
 
   function _apply(payload) {
@@ -35,6 +36,9 @@ export const usePaperStore = defineStore('paper', () => {
     mode.value = payload.kind
     year.value = payload.year
     title.value = _title(payload.kind, payload.year)
+    if (payload.kind === 'reinforce' && payload.questions.some(q => q.qtype === 'subjective')) {
+      title.value = '强化训练卷'
+    }
     questions.value = payload.questions
     items.value = payload.items || {}
     graded.value = payload.status === 'graded'

@@ -105,7 +105,7 @@
           </div>
 
           <div class="mt-3 flex flex-wrap gap-x-4 gap-y-1 border-t border-line pt-2 text-[11px] text-muted">
-            <span>📄 精做真题</span><span>🔁 强化训练</span><span>🧪 全真模考</span>
+            <span>📄 精做真题</span><span>🔁 选择题强化</span><span>周日大题强化</span><span>🧪 全真模考</span>
             <span class="text-ok">■ 已完成</span><span class="text-amber">■ 欠账待补</span><span>□ 预排（可自动调整）</span>
           </div>
         </section>
@@ -115,10 +115,10 @@
           <summary class="cursor-pointer text-sm font-semibold text-muted">▸ 自选：临时练强化 / 挑某年真题</summary>
           <div class="mt-3 flex flex-wrap gap-2">
             <el-button type="primary" plain :disabled="!stats.due" @click="go('reinforce', { all: 0 })">
-              练到期知识点（{{ stats.due }}）
+              练到期选择题（{{ stats.due }}）
             </el-button>
             <el-button plain :disabled="!stats.pool" @click="go('reinforce', { all: 1 })">
-              练全部薄弱点（{{ stats.pool }}）
+              练全部选择题（{{ stats.pool }}）
             </el-button>
           </div>
           <div class="mt-3 grid grid-cols-[repeat(auto-fill,minmax(84px,1fr))] gap-2">
@@ -149,7 +149,7 @@ const cal = ref(null)
 const years = ref([])
 const stats = ref({ due: 0, pool: 0 })
 const startingId = ref(null)
-const ICON = { exam: '📄', reinforce: '🔁', mock: '🧪' }
+const ICON = { exam: '📄', reinforce: '🔁', reinforce_subjective: '', mock: '🧪' }
 let studyBoundaryTimer = null
 
 function fmtDate(s) {
@@ -200,7 +200,8 @@ function isStudyDay(e) {
   return e?.date === cal.value.study_day
 }
 function chip(e) {
-  if (e.kind === 'reinforce') return '强化'
+  if (e.kind === 'reinforce') return '选择'
+  if (e.kind === 'reinforce_subjective') return '大题'
   return e.kind === 'mock' ? `模考${e.ref_year}` : `${e.ref_year}`
 }
 function canReview(e) {
@@ -278,7 +279,7 @@ async function onStart(t) {
     const r = await startTask(t.id)
     const q = r.mode === 'exam'
       ? { mode: 'exam', year: r.year, sid: r.session_id }
-      : { mode: 'reinforce', all: '0', sid: r.session_id }
+      : { mode: r.mode, all: '0', sid: r.session_id }
     router.push({ name: 'paper', query: q })
   } catch (e) {
     ElMessage.error(e?.response?.data?.error || '无法开始该任务')

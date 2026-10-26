@@ -15,7 +15,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
-from . import auth, grading, scheduler, llmconfig, upload, plan, exercises
+from . import auth, grading, scheduler, llmconfig, upload, plan, exercises, relations
 from .config import NOTE_IMAGES_DIR
 from .db import get_db
 
@@ -73,7 +73,7 @@ class LoginIn(BaseModel):
 
 
 class CreateSessionIn(BaseModel):
-    kind: str = 'exam'          # exam | reinforce
+    kind: str = 'exam'          # exam | reinforce | reinforce_subjective
     year: Optional[int] = None  # exam 必填
     all: bool = False           # reinforce：True=不限到期全池
     fresh: bool = False         # True=另起一场新记录（「再做一次」）
@@ -181,56 +181,13 @@ def _exam_question_ids(conn, year: int):
 
 
 def _reinforce_question_ids(conn, all_pool: bool):
-    """同知识点新题优先；经典练习优先于模拟和真题，保留尚未完成的模考卷。"""
-    now = scheduler.now_iso()
-    if all_pool:
-        pts = conn.execute('SELECT tag FROM point_schedule ORDER BY due_at').fetchall()
-    else:
-        pts = conn.execute('SELECT tag FROM point_schedule WHERE due_at<=? ORDER BY due_at',
-                           (now,)).fetchall()
-    if not pts:
-        return []
-    cfg = conn.execute('SELECT mock_years FROM plan_config WHERE id=1').fetchone()
-    reserved = {int(year.strip()) for year in (cfg['mock_years'] if cfg else '2024,2025,2026').split(',') if year.strip().isdigit()}
-    completed_years = {r['year'] for r in conn.execute("SELECT DISTINCT year FROM sessions WHERE kind='exam' AND status='graded'")}
-    reserved -= completed_years
-    source_priority = {'exercise': 0, 'simulate': 1, 'exam': 2}
-    recent_cut = scheduler.hours_ago_iso(12)  # 12h 内刚做过的先不重复
-    per_point = {}
-    for pt in pts:
-        tag = pt['tag']
-        rows = conn.execute(
-            'SELECT q.id, q.tags, q.source, q.year, COUNT(si.id) attempts, MAX(si.updated_at) last_done,'
-            " MAX(CASE WHEN si.result IN ('wrong','fuzzy') THEN 1 ELSE 0 END) ever_missed"
-            ' FROM questions q LEFT JOIN session_items si ON si.question_id=q.id'
-            " WHERE q.qtype='choice' AND q.tags LIKE ?"
-            ' GROUP BY q.id', (f'%{tag}%',)).fetchall()
-        # LIKE 只是粗筛，再用精确 token 过滤，避免“二叉树”误配“二叉树遍历”
-        rows = [r for r in rows if tag in scheduler.split_tags(r['tags'])]
-        rows = [r for r in rows if not (r['source'] == 'exam' and r['year'] in reserved)]
-        rows = [r for r in rows if not (r['last_done'] and r['last_done'] > recent_cut)]
-        rows.sort(key=lambda r: (source_priority.get(r['source'], 3), r['id']))
-        new = [r['id'] for r in rows if r['attempts'] == 0]
-        missed = [r['id'] for r in rows if r['attempts'] and r['ever_missed']]
-        others = [r['id'] for r in rows if r['attempts'] and not r['ever_missed']]
-        per_point[tag] = new + missed + others   # 新题优先，其次原错题，最后已掌握的
-    order = [pt['tag'] for pt in pts]
-    picked, seen = [], set()
-    while len(picked) < 30 and any(per_point[t] for t in order):
-        for t in order:
-            if not per_point[t]:
-                continue
-            qid = per_point[t].pop(0)
-            if qid not in seen:
-                seen.add(qid)
-                picked.append(qid)
-                if len(picked) >= 30:
-                    break
-    return picked
+    """Only read the offline, unanimously approved relation index."""
+    return relations.select_questions(conn, all_pool)
 
 
 def _open_session_id(conn, kind: str, year=None, all_pool: bool = False, fresh: bool = False) -> int:
     """建/续一场做题，返回 session id。fresh=False 时优先续接未交卷的同类卷。"""
+    relation_sources = {}
     if kind == 'exam':
         if not year:
             raise HTTPException(status_code=400, detail='真题卷需指定年份')
@@ -242,21 +199,31 @@ def _open_session_id(conn, kind: str, year=None, all_pool: bool = False, fresh: 
         qids = _exam_question_ids(conn, year)
         if not qids:
             raise HTTPException(status_code=404, detail='该年份暂无题目')
-    elif kind == 'reinforce':
+    elif kind in relations.REINFORCEMENT_TYPES:
+        qtype = relations.REINFORCEMENT_TYPES[kind]
         if not fresh:
-            s = conn.execute("SELECT id FROM sessions WHERE kind='reinforce' AND status='doing'"
-                             ' ORDER BY id DESC LIMIT 1').fetchone()
+            # Old mixed papers remain accessible by sid, but are not resumed as choice-only papers.
+            s = conn.execute("SELECT s.id FROM sessions s WHERE s.kind=? AND s.status='doing' "
+                             'AND EXISTS(SELECT 1 FROM session_items si WHERE si.session_id=s.id) '
+                             'AND NOT EXISTS(SELECT 1 FROM session_items si JOIN questions q ON q.id=si.question_id '
+                             'WHERE si.session_id=s.id AND q.qtype<>?) ORDER BY s.id DESC LIMIT 1',
+                             (kind,qtype)).fetchone()
             if s:
                 return s['id']
-        qids = _reinforce_question_ids(conn, all_pool)
+        selected = relations.select_questions(conn, all_pool, with_sources=True, qtype=qtype)
+        qids = [item['question_id'] for item in selected]
+        relation_sources = {item['question_id']:item['source_id'] for item in selected}
+        if not qids:
+            label = '选择题' if qtype == 'choice' else '大题'
+            raise HTTPException(status_code=409, detail=f'暂无可用的关联{label}')
     else:
         raise HTTPException(status_code=400, detail='未知卷型')
     cur = conn.execute('INSERT INTO sessions(kind,year,status) VALUES(?,?,?)',
                        (kind, year if kind == 'exam' else None, 'doing'))
     sid = cur.lastrowid
     for pos, qid in enumerate(qids):
-        conn.execute('INSERT INTO session_items(session_id,question_id,position) VALUES(?,?,?)',
-                     (sid, qid, pos))
+        conn.execute('INSERT INTO session_items(session_id,question_id,position,relation_source_id) VALUES(?,?,?,?)',
+                     (sid, qid, pos, relation_sources.get(qid)))
     conn.commit()
     return sid
 
@@ -275,9 +242,8 @@ def get_session(sid: int, conn=Depends(get_db), _=Depends(auth.require_user)):
 
 @router.get('/reinforce/stats')
 def reinforce_stats(conn=Depends(get_db), _=Depends(auth.require_user)):
-    now = scheduler.now_iso()
-    due = conn.execute('SELECT COUNT(*) c FROM point_schedule WHERE due_at<=?', (now,)).fetchone()['c']
-    pool = conn.execute('SELECT COUNT(*) c FROM point_schedule').fetchone()['c']
+    due = len(relations.weak_sources(conn,qtype='choice'))
+    pool = len(relations.weak_sources(conn,True,qtype='choice'))
     return {'due': due, 'pool': pool}
 
 
@@ -302,7 +268,10 @@ def patch_item(sid: int, qid: int, body: PatchItemIn, conn=Depends(get_db), _=De
 
 @router.post('/sessions/{sid}/submit')
 def submit(sid: int, conn=Depends(get_db), _=Depends(auth.require_user)):
-    """交卷：批改本卷所有选择题（作答已自动存好），跑 SRS，标记 graded。大题不入此统计。"""
+    """交卷：批改本卷所有选择题（作答已自动存好），跑 SRS，标记 graded。
+
+    大题强化允许提前交卷；未批改的大题仍保留在本场记录中，交卷后可继续作答并单题 AI 批改。
+    """
     sess = _get_session(conn, sid)
     rows = conn.execute(
         'SELECT si.*, q.qtype, q.answer, q.tags FROM session_items si JOIN questions q ON q.id=si.question_id'
@@ -314,9 +283,13 @@ def submit(sid: int, conn=Depends(get_db), _=Depends(auth.require_user)):
         conn.execute('UPDATE session_items SET is_correct=?,result=?,updated_at=? WHERE id=?',
                      (is_correct, result, scheduler.now_iso(), si['id']))
         if sess['status'] != 'graded':   # 幂等：重复交卷不重复推调度
+            scheduler.update(conn, si['question_id'], result)
             for tag in scheduler.split_tags(si['tags']):
                 scheduler.update_point(conn, tag, result)
         correct += is_correct
+    if sess['status'] != 'graded':
+        for source_id in {si['relation_source_id'] for si in rows if si['relation_source_id']}:
+            relations.settle_source_review(conn,sid,source_id)
     fuzzy = sum(1 for si in rows if si['fuzzy'])
     conn.execute("UPDATE sessions SET status='graded', graded_at=? WHERE id=?",
                  (scheduler.now_iso(), sid))
@@ -371,6 +344,7 @@ def grade_subjective(sid: int, body: GradeIn, conn=Depends(get_db), _=Depends(au
 
     def saved_result(item):
         return {'verdict': item['verdict'], 'score_ratio': item['score_ratio'],
+                'result': item['result'],
                 'comment': item['comment'], 'reference_html': q['answer_html'],
                 'answer_text': item['answer_text']}
 
@@ -409,8 +383,10 @@ def grade_subjective(sid: int, body: GradeIn, conn=Depends(get_db), _=Depends(au
         if not updated:
             raise HTTPException(status_code=409, detail='本次批改已过期，请重试以查看最新结果')
         scheduler.update(conn, body.question_id, result)
+        if it['relation_source_id']:
+            relations.settle_source_review(conn,sid,it['relation_source_id'])
         conn.commit()
-        return {**j, 'reference_html': q['answer_html'], 'answer_text': student}
+        return {**j, 'result': result, 'reference_html': q['answer_html'], 'answer_text': student}
     finally:
         conn.rollback()
         conn.execute('UPDATE session_items SET grading_started_at=NULL WHERE id=? AND grading_started_at=?',
@@ -753,8 +729,8 @@ def start_task(tid: int, conn=Depends(get_db), _=Depends(auth.require_user)):
         sid = _open_session_id(conn, 'exam', r['ref_year'])
         mode, year = 'exam', r['ref_year']
     else:
-        sid = _open_session_id(conn, 'reinforce')
-        mode, year = 'reinforce', None
+        sid = _open_session_id(conn, r['kind'])
+        mode, year = r['kind'], None
     conn.execute('UPDATE daily_tasks SET session_id=? WHERE id=?', (sid, tid))
     conn.commit()
     return {'session_id': sid, 'mode': mode, 'year': year}

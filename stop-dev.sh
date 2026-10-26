@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 停止开发用的后端(uvicorn :8408) 与前端(vite :5408)。
+# 停止 cs408：兼容开发双进程与 start-prod.sh 启动的静态单进程。
 # 不用 set -e：允许部分目标本就未运行。兼容 Windows Git Bash 与 Linux/macOS。
 set -uo pipefail
 
@@ -34,7 +34,7 @@ port_pid() {
     $1 ~ /^tcp/ && $4 ~ p { split($NF, a, "/"); if (a[1] ~ /^[0-9]+$/) { print a[1]; exit } }'
 }
 
-# 通过 pid 文件停止（start-dev.sh 写入）。
+# 通过 pid 文件停止（start-dev.sh / start-prod.sh 写入）。
 for pid_file in "$ROOT_DIR/backend/server.pid" "$ROOT_DIR/frontend/server.pid"; do
   if [[ -s "$pid_file" ]]; then
     pid="$(tr -cd '0-9' < "$pid_file")"
@@ -77,8 +77,8 @@ for port in "$BACKEND_PORT" "$FRONTEND_PORT"; do
   [[ -n "$pid" ]] && leftover="$leftover :$port(pid $pid)"
 done
 if [[ -n "$leftover" ]]; then
-  echo "cs408 dev 未完全停止，仍在监听:$leftover" >&2
+  echo "cs408 未完全停止，仍在监听:$leftover" >&2
   exit 1
 fi
 
-echo "cs408 dev 已停止 (backend :$BACKEND_PORT, frontend :$FRONTEND_PORT)。"
+echo "cs408 已停止 (backend :$BACKEND_PORT, frontend :$FRONTEND_PORT)。"

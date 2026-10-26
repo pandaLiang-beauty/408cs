@@ -7,7 +7,13 @@
       :visible-question-ids="visibleQuestionIds"
       :render-key="`${page}:${store.graded}`" @locate="locateQuestion"
     >
-      <Scorecard v-if="store.graded && store.summary" :summary="store.summary" />
+      <div v-if="store.graded && isSubjectiveReinforcement" class="mx-auto mb-3.5 flex max-w-[820px] flex-wrap gap-4 text-sm">
+        <span>综合 {{ store.questions.length }} 题</span>
+        <span class="text-ok">对 {{ subjectiveResults.correct }}</span>
+        <span class="text-amber">部分对 {{ subjectiveResults.fuzzy }}</span>
+        <span class="text-bad">错 {{ subjectiveResults.wrong }}</span>
+      </div>
+      <Scorecard v-else-if="store.graded && store.summary" :summary="store.summary" />
 
       <div class="paper-sheet mx-auto max-w-[820px] rounded-md border border-line bg-paper px-10 py-8 shadow-lg max-sm:px-4">
         <!-- 卷头：只在第一页出现完整卷头，后续页出简版页眉 -->
@@ -33,13 +39,13 @@
         </template>
 
         <!-- 卷尾页码（试卷感） -->
-        <div v-if="isExam && totalPages > 1" class="mt-6 border-t border-line pt-3 text-center font-song text-[13px] text-muted">
+        <div v-if="totalPages > 1" class="mt-6 border-t border-line pt-3 text-center font-song text-[13px] text-muted">
           — 第 {{ page }} 页 · 共 {{ totalPages }} 页 —
         </div>
       </div>
 
       <!-- 翻页条 -->
-      <div v-if="isExam && totalPages > 1" class="mx-auto mt-3 flex max-w-[820px] flex-wrap items-center justify-center gap-1.5">
+      <div v-if="totalPages > 1" class="mx-auto mt-3 flex max-w-[820px] flex-wrap items-center justify-center gap-1.5">
         <el-button size="small" :disabled="page === 1" @click="go(page - 1)">上一页</el-button>
         <button
           v-for="p in totalPages"
@@ -66,7 +72,7 @@
             交卷
           </el-button>
           <template v-else>
-            <el-button type="primary" @click="reinforceAgain">再来一组强化</el-button>
+            <el-button type="primary" @click="reinforceAgain">{{ isSubjectiveReinforcement ? '再练大题' : '再来一组强化' }}</el-button>
             <el-button @click="router.push({ name: 'home' })">返回首页</el-button>
           </template>
         </div>
@@ -98,6 +104,16 @@ const retryingSaves = ref(false)
 const CHOICE_PER_PAGE = 10   // 真题卷：每页 10 道单选
 const SUBJ_PER_PAGE = 2      // 综合大题篇幅长，每页 2 道
 const isExam = computed(() => store.mode === 'exam')
+const isSubjectiveReinforcement = computed(() => store.mode === 'reinforce_subjective')
+const subjectiveResults = computed(() => {
+  const counts = { correct: 0, fuzzy: 0, wrong: 0 }
+  for (const question of store.questions) {
+    const result = store.items[question.id]?.result
+    if (Object.hasOwn(counts, result)) counts[result]++
+  }
+  return counts
+})
+const subjectiveGradedCount = computed(() => Object.values(subjectiveResults.value).reduce((a, b) => a + b, 0))
 
 // 进卷：带 sid 就恢复那一场；否则建/续一场并把 sid 写回 query（刷新可恢复）。
 async function load() {
@@ -111,14 +127,14 @@ async function load() {
     if (mode === 'exam' && year) {
       const id = await store.startSession({ kind: 'exam', year: Number(year), fresh: fresh === '1' })
       router.replace({ name: 'paper', query: { mode, year, sid: id } })
-    } else if (mode === 'reinforce') {
-      const id = await store.startSession({ kind: 'reinforce', all: all === '1', fresh: fresh === '1' })
+    } else if (mode === 'reinforce' || mode === 'reinforce_subjective') {
+      const id = await store.startSession({ kind: mode, all: all === '1', fresh: fresh === '1' })
       router.replace({ name: 'paper', query: { mode, all: all || '0', sid: id } })
     } else {
       router.replace({ name: 'home' })
     }
-  } catch {
-    ElMessage.error('加载失败，请确认后端已在 8408 端口运行')
+  } catch (error) {
+    ElMessage.error(errorMessage(error, '加载失败，请稍后重试'))
   }
 }
 onMounted(load)
@@ -154,8 +170,15 @@ onBeforeUnmount(() => {
   void store.flushAll().catch(() => {})
 })
 
-// 真题卷按正常试卷组织并分页：单选连续为一节、综合大题为一节；强化卷保持单页连续流。
+// 大题强化每页两题，选择题强化保持单页连续流。
 const pages = computed(() => {
+  if (isSubjectiveReinforcement.value) {
+    const out = []
+    for (let i = 0; i < store.questions.length; i += SUBJ_PER_PAGE) {
+      out.push([{ title: '综合应用题', items: store.questions.slice(i, i + SUBJ_PER_PAGE).map((q, k) => ({ q, index: i + k })) }])
+    }
+    return out.length ? out : [[{ title: '', items: [] }]]
+  }
   if (!isExam.value) return [[{ title: '', items: store.questions.map((q, i) => ({ q, index: i })) }]]
   const qs = [...store.questions].sort((a, b) => a.number - b.number)
 
@@ -192,9 +215,14 @@ function locateQuestion(questionId) {
   if (index >= 0) page.value = index + 1
 }
 
-const statusText = computed(() =>
-  store.graded ? '已交卷' : `已作答 ${store.answeredCount} / ${store.questions.length}`,
-)
+const statusText = computed(() => {
+  if (store.graded && isSubjectiveReinforcement.value) {
+    return `已交卷 · 已批改 ${subjectiveGradedCount.value} / ${store.questions.length}`
+  }
+  if (store.graded) return '已交卷'
+  if (isSubjectiveReinforcement.value) return `已批改 ${subjectiveGradedCount.value} / ${store.questions.length}`
+  return `已作答 ${store.answeredCount} / ${store.questions.length}`
+})
 
 // 卷头信息：真题套卷是真 408 结构（单选 80 + 综合 70 = 150）；强化卷只报题数。
 const paperMeta = computed(() => {
@@ -205,7 +233,11 @@ const paperMeta = computed(() => {
     const s = qs.filter((q) => q.qtype === 'subjective').length
     return `单选 ${c} 题 · 综合 ${s} 题 · 满分 150 分 · 共 ${totalPages.value} 页 · ${instruction}`
   }
-  return `共 ${qs.length} 题 · 同知识点强化 · ${instruction}`
+  const c = qs.filter((q) => q.qtype === 'choice').length
+  const s = qs.filter((q) => q.qtype === 'subjective').length
+  if (isSubjectiveReinforcement.value) return `大题强化 · 综合 ${s} 题 · 共 ${totalPages.value} 页`
+  if (!s) return `选择题强化 · 单选 ${c} 题`
+  return `关联强化 · 单选 ${c} 题 · 综合 ${s} 题`
 })
 
 async function onSubmit() {
@@ -231,6 +263,7 @@ async function retryPendingSaves() {
 }
 
 function reinforceAgain() {
-  router.push({ name: 'paper', query: { mode: 'reinforce', all: '0', fresh: '1' } })
+  const mode = isSubjectiveReinforcement.value ? 'reinforce_subjective' : 'reinforce'
+  router.push({ name: 'paper', query: { mode, all: '0', fresh: '1' } })
 }
 </script>

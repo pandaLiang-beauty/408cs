@@ -35,6 +35,9 @@ class PlanProgressionTests(unittest.TestCase):
             "INSERT INTO plan_config VALUES (1, '2026-12-19', '2026-09-01', '2024,2025,2026', 21)"
         )
         self.conn.execute("INSERT INTO questions VALUES (2009, 'exam', 'choice', '栈')")
+        due = patch('app.plan._due_points',return_value=0)
+        due.start()
+        self.addCleanup(due.stop)
 
     def tearDown(self):
         self.conn.close()
@@ -87,6 +90,64 @@ class PlanProgressionTests(unittest.TestCase):
 
         rows = self.conn.execute('SELECT plan_date, kind FROM daily_tasks ORDER BY plan_date').fetchall()
         self.assertEqual([(row['plan_date'], row['kind']) for row in rows], [('2026-09-01', 'exam')])
+
+    @patch('app.plan.today_str', return_value='2026-10-11')
+    def test_sunday_creates_only_one_subjective_task_even_with_backlog(self, _today):
+        self.conn.execute("INSERT INTO daily_tasks(plan_date,kind,ref_year) VALUES('2026-10-10','exam',2009)")
+        plan.ensure_through_today(self.conn)
+        plan.ensure_through_today(self.conn)
+        rows = self.conn.execute('SELECT plan_date,kind,status FROM daily_tasks ORDER BY plan_date').fetchall()
+        self.assertEqual([tuple(r) for r in rows],[('2026-10-10','exam','todo'),('2026-10-11','reinforce_subjective','todo')])
+
+    @patch('app.plan.today_str', return_value='2026-10-11')
+    def test_sunday_replaces_unopened_exam_and_releases_year(self, _today):
+        tid = self.conn.execute("INSERT INTO daily_tasks(plan_date,kind,ref_year) VALUES('2026-10-11','exam',2009)").lastrowid
+        plan.ensure_through_today(self.conn)
+        row = self.conn.execute('SELECT * FROM daily_tasks WHERE id=?',(tid,)).fetchone()
+        self.assertEqual((row['kind'],row['ref_year']),('reinforce_subjective',None))
+        self.assertNotIn(2009,plan._used_years(self.conn))
+
+    @patch('app.plan.today_str', return_value='2026-10-11')
+    def test_sunday_keeps_already_open_paper(self, _today):
+        self.conn.execute("INSERT INTO sessions VALUES(1,'doing')")
+        self.conn.execute("INSERT INTO daily_tasks(plan_date,kind,ref_year,session_id) VALUES('2026-10-11','exam',2009,1)")
+        plan.ensure_through_today(self.conn)
+        row = self.conn.execute('SELECT kind,ref_year,session_id FROM daily_tasks').fetchone()
+        self.assertEqual(tuple(row),('exam',2009,1))
+
+    @patch('app.plan.today_str', return_value='2026-10-12')
+    def test_sunday_does_not_consume_weekday_alternation(self, _today):
+        self.conn.execute("INSERT INTO daily_tasks(plan_date,kind,ref_year,status) VALUES('2026-10-10','exam',2009,'done')")
+        self.conn.execute("INSERT INTO daily_tasks(plan_date,kind,status) VALUES('2026-10-11','reinforce_subjective','done')")
+        plan.ensure_through_today(self.conn)
+        row = self.conn.execute("SELECT kind FROM daily_tasks WHERE plan_date='2026-10-12'").fetchone()
+        self.assertEqual(row['kind'],'reinforce')
+
+    @patch('app.plan.today_str', return_value='2026-10-12')
+    def test_unfinished_sunday_is_kept_as_overdue(self, _today):
+        self.conn.execute("INSERT INTO daily_tasks(plan_date,kind) VALUES('2026-10-11','reinforce_subjective')")
+        plan.ensure_through_today(self.conn)
+        self.assertIsNone(self.conn.execute("SELECT 1 FROM daily_tasks WHERE plan_date='2026-10-12'").fetchone())
+        self.assertEqual(plan._overdue_rows(self.conn,'2026-10-12')[0]['kind'],'reinforce_subjective')
+
+    @patch('app.plan.today_str', return_value='2026-10-10')
+    def test_sunday_preview_matches_actual_task_despite_backlog(self, _today):
+        self.conn.execute("INSERT INTO daily_tasks(plan_date,kind,ref_year) VALUES('2026-10-10','exam',2009)")
+        preview = plan.upcoming(self.conn,plan.ensure_config(self.conn))
+        self.assertEqual(len(preview),1)
+        self.assertEqual((preview[0]['date'],preview[0]['kind']),('2026-10-11','reinforce_subjective'))
+        with patch('app.plan.today_str',return_value='2026-10-11'):
+            plan.ensure_through_today(self.conn)
+        row = self.conn.execute("SELECT * FROM daily_tasks WHERE plan_date='2026-10-11'").fetchone()
+        self.assertEqual(plan.task_public(self.conn,row)['title'],preview[0]['title'])
+
+    def test_sunday_obeys_beijing_eight_boundary(self):
+        cfg = plan.ensure_config(self.conn)
+        for now,kind in [(datetime(2026,10,10,23,59,tzinfo=timezone.utc),'exam'),
+                         (datetime(2026,10,11,0,0,tzinfo=timezone.utc),'reinforce_subjective'),
+                         (datetime(2026,10,11,23,59,tzinfo=timezone.utc),'reinforce_subjective'),
+                         (datetime(2026,10,12,0,0,tzinfo=timezone.utc),'exam')]:
+            self.assertEqual(plan._decide(self.conn,cfg,plan.today_str(now),'',0,set())[0],kind)
 
 
 if __name__ == '__main__':

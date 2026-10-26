@@ -2,7 +2,7 @@
 
 模型（4 个概念）：
   question       题库，稳定不变。
-  session        一场做题：真题套卷(exam,含 year) 或 强化卷(reinforce)；有 doing/graded 状态。
+  session        一场做题：真题(exam)、选择题强化(reinforce)、大题强化(reinforce_subjective)。
   session_item   一次做题记录 = (session, question) 一行。同一题在不同卷里各占一行，
                  各自的 chosen/fuzzy/批改结果/草稿。刷新靠它恢复。
   draft_image    本次作答的草稿图片，一条 session_item 可追加多张。
@@ -10,6 +10,8 @@
   note_image     笔记图片附件，文件落盘，元数据挂 note_id。
   review_schedule SRS，按 question_id 一份 = 这题的整体掌握度，不随卷分裂。
 """
+
+from .relations import SCHEMA_SQL as RELATIONS_SCHEMA_SQL
 
 SCHEMA_SQL = """
 PRAGMA journal_mode=WAL;
@@ -42,7 +44,7 @@ CREATE INDEX IF NOT EXISTS idx_q_source ON questions(source);
 
 CREATE TABLE IF NOT EXISTS sessions (
   id         INTEGER PRIMARY KEY AUTOINCREMENT,
-  kind       TEXT NOT NULL DEFAULT 'exam',        -- exam | reinforce
+  kind       TEXT NOT NULL DEFAULT 'exam',        -- exam | reinforce | reinforce_subjective
   year       INTEGER,                             -- exam 卷所属年份；reinforce 为 NULL
   status     TEXT NOT NULL DEFAULT 'doing',       -- doing | graded
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -63,6 +65,7 @@ CREATE TABLE IF NOT EXISTS session_items (
   answer_text TEXT NOT NULL DEFAULT '',           -- 大题：本次作答原文
   verdict     TEXT NOT NULL DEFAULT '',           -- 大题：AI 判定(对/部分对/错)
   score_ratio REAL,                              -- 大题：得分比例，旧记录保留空值
+  relation_source_id INTEGER REFERENCES questions(id),
   grading_started_at TEXT,                        -- 大题：正在批改的请求，超时后可重试
   comment     TEXT NOT NULL DEFAULT '',           -- 大题：AI 点评
   updated_at  TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -194,7 +197,7 @@ CREATE TABLE IF NOT EXISTS draft_tokens (
 );
 CREATE INDEX IF NOT EXISTS idx_dt_exp ON draft_tokens(expires_at);
 
--- 学习排程：只安排「天」，不排钟点。一天套卷、一天强化交替；近三年真题留作考前模考。
+-- 学习排程：周一至周六套卷与选择题强化交替，周日大题强化；近三年真题留作考前模考。
 CREATE TABLE IF NOT EXISTS plan_config (
   id         INTEGER PRIMARY KEY CHECK (id = 1),
   exam_date  TEXT NOT NULL DEFAULT '2026-12-19',
@@ -206,7 +209,7 @@ CREATE TABLE IF NOT EXISTS plan_config (
 CREATE TABLE IF NOT EXISTS daily_tasks (
   id         INTEGER PRIMARY KEY AUTOINCREMENT,
   plan_date  TEXT NOT NULL,                     -- YYYY-MM-DD（学习日；次日北京时间 08:00 到期）
-  kind       TEXT NOT NULL,                     -- exam(精做真题) | mock(模考) | reinforce(强化)
+  kind       TEXT NOT NULL,                     -- exam | mock | reinforce | reinforce_subjective
   ref_year   INTEGER,                           -- 真题/模考年份；强化为 NULL
   session_id INTEGER REFERENCES sessions(id) ON DELETE SET NULL,
   status     TEXT NOT NULL DEFAULT 'todo',      -- todo | done
@@ -220,6 +223,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_task_plan_date_unique ON daily_tasks(plan_
 def initialize(conn) -> None:
     _pre_migrate(conn)          # 先给老表补列，之后 SCHEMA_SQL 里引用 source 的索引才不会报错
     conn.executescript(SCHEMA_SQL)
+    conn.executescript(RELATIONS_SCHEMA_SQL)
     # 保留旧版每次作答的单张草稿；重复启动不会重复导入，也不会改动图片文件。
     conn.execute(
         'INSERT OR IGNORE INTO draft_images(session_item_id,stored_name,created_at)'
@@ -234,6 +238,8 @@ def _pre_migrate(conn) -> None:
     dedupe_daily_tasks(conn)
     item_cols = {r[1] for r in conn.execute('PRAGMA table_info(session_items)')}
     if item_cols:
+        if 'relation_source_id' not in item_cols:
+            conn.execute('ALTER TABLE session_items ADD COLUMN relation_source_id INTEGER REFERENCES questions(id)')
         if 'score_ratio' not in item_cols:
             conn.execute('ALTER TABLE session_items ADD COLUMN score_ratio REAL')
         if 'grading_started_at' not in item_cols:

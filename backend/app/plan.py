@@ -1,10 +1,10 @@
 """学习排程：按北京时间 08:00 切换学习日。
 
 规则（用户拍板）：
-- 一天套卷、一天强化，交替推进。
+- 周一至周六：一天套卷、一天选择题强化，交替推进；周日单独安排大题强化。
 - 真题从旧到新精做（2009→2023），近三年（2024/2025/2026）留到考前当模考。
 - 没做完不清零：过期未完成的任务一直挂着显示为「补做」。
-- 未完成当前任务时，不生成下一项；完成后才推进到强化或下一套真题。
+- 未完成当前任务时，不推进普通任务；周日大题强化独立安排，欠账保留。
 
 任务在所属学习日的次日 08:00 前有效；未来只预排下一项待做任务，避免把尚未完成的真题误显示为后续强化。
 """
@@ -97,7 +97,9 @@ def _used_years(conn):
 
 
 def _decide(conn, cfg, day: str, prev_kind: str, overdue: int, used: set):
-    """给某一天决定任务；存在未完成旧任务时不生成下一项。"""
+    """周日独立安排大题；其余学习日完成旧任务后才继续交替。"""
+    if _d(day).weekday() == 6:
+        return ('reinforce_subjective', None)
     if overdue:
         return None
     if prev_kind in ('exam', 'mock'):
@@ -116,7 +118,8 @@ def _decide(conn, cfg, day: str, prev_kind: str, overdue: int, used: set):
 
 
 def _prev_kind(conn, day: str) -> str:
-    r = conn.execute('SELECT kind FROM daily_tasks WHERE plan_date < ? ORDER BY plan_date DESC, id DESC'
+    r = conn.execute("SELECT kind FROM daily_tasks WHERE plan_date < ? AND kind<>'reinforce_subjective' "
+                     'ORDER BY plan_date DESC, id DESC'
                      ' LIMIT 1', (day,)).fetchone()
     return r['kind'] if r else ''
 
@@ -148,9 +151,14 @@ def ensure_through_today(conn) -> dict:
     _remove_premature_reinforcements(conn)
 
     day = today_str()
+    # Replace only unopened Sunday tasks; never rewrite an existing paper or its answers.
+    conn.execute(
+        "UPDATE daily_tasks SET kind='reinforce_subjective',ref_year=NULL "
+        "WHERE plan_date>=? AND strftime('%w',plan_date)='0' "
+        "AND status='todo' AND session_id IS NULL AND kind<>'reinforce_subjective'", (day,))
     current = conn.execute('SELECT 1 FROM daily_tasks WHERE plan_date=?', (day,)).fetchone()
     overdue = len(_overdue_rows(conn, day))
-    if not current and not overdue:
+    if not current:
         used = _used_years(conn)
         decision = _decide(conn, cfg, day, _prev_kind(conn, day), overdue, used)
         if decision:
@@ -174,10 +182,9 @@ def _counts(conn, year):
     return (r['c'] or 0), (r['s'] or 0)
 
 
-def _due_points(conn) -> int:
-    from . import scheduler
-    return conn.execute('SELECT COUNT(*) c FROM point_schedule WHERE due_at<=?',
-                        (scheduler.now_iso(),)).fetchone()['c']
+def _due_points(conn, qtype='choice') -> int:
+    from . import relations
+    return len(relations.weak_sources(conn,qtype=qtype))
 
 
 def point_progress(conn) -> dict:
@@ -207,32 +214,38 @@ def describe(conn, kind: str, ref_year) -> dict:
         c, s = _counts(conn, ref_year)
         title = f'{ref_year} 年真题' + (' · 全真模考' if kind == 'mock' else '')
         return {'title': title, 'detail': f'整套 {c + s} 题（单选 {c} · 综合 {s}）· 满分 150'}
-    due = _due_points(conn)
-    return {'title': '强化训练（按知识点）',
-            'detail': f'{due} 个到期薄弱知识点 · 同知识点新题穿插原错题' if due
-                      else '暂无到期知识点，可自选「练全部薄弱点」'}
+    subjective = kind == 'reinforce_subjective'
+    due = _due_points(conn, 'subjective' if subjective else 'choice')
+    return {'title': '周日大题强化' if kind == 'reinforce_subjective' else '选择题强化',
+            'detail': f'{due} 道到期薄弱题 · 最多 {20 if subjective else 50} 题' if due
+                      else '暂无到期薄弱题'}
 
 
 def task_public(conn, r) -> dict:
     d = describe(conn, r['kind'], r['ref_year'])
+    if r['kind'] == 'reinforce' and r['session_id'] and conn.execute(
+            "SELECT 1 FROM session_items si JOIN questions q ON q.id=si.question_id "
+            "WHERE si.session_id=? AND q.qtype='subjective' LIMIT 1", (r['session_id'],)).fetchone():
+        d['title'] = '强化训练（原卷）'
     return {'id': r['id'], 'date': r['plan_date'], 'weekday': weekday_cn(r['plan_date']),
             'kind': r['kind'], 'ref_year': r['ref_year'], 'status': r['status'],
             'session_id': r['session_id'], 'deadline_at': task_deadline_at(r['plan_date']), **d}
 
 
 def _last_materialized_kind(conn) -> str:
-    r = conn.execute('SELECT kind FROM daily_tasks ORDER BY plan_date DESC, id DESC LIMIT 1').fetchone()
+    r = conn.execute("SELECT kind FROM daily_tasks WHERE kind<>'reinforce_subjective' "
+                     'ORDER BY plan_date DESC, id DESC LIMIT 1').fetchone()
     return r['kind'] if r else ''
 
 
 def simulate_range(conn, cfg, from_d: date, to_d: date) -> list:
     """预排下一项待做任务（不落库）；当前任务完成后才推算后续。"""
-    if from_d > to_d or _overdue_rows(conn, from_d.isoformat()):
+    if from_d > to_d:
         return []
     used = set(_used_years(conn))
     prev_kind = _last_materialized_kind(conn)
     day = from_d.isoformat()
-    decision = _decide(conn, cfg, day, prev_kind, 0, used)
+    decision = _decide(conn, cfg, day, prev_kind, len(_overdue_rows(conn, day)), used)
     if not decision:
         return []
     kind, year = decision

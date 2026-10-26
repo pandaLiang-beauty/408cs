@@ -3,7 +3,7 @@ import sqlite3
 import unittest
 from unittest.mock import patch
 
-from app import api, schema
+from app import api, schema, relations
 from app.exercises import classify, source_label
 from ingest_exercises import fingerprint, import_records, parse_page, plain
 
@@ -149,6 +149,17 @@ class ExerciseIntegrationTests(unittest.TestCase):
 
     def due_point(self, tag='死锁概念'):
         self.conn.execute("INSERT INTO point_schedule(tag,due_at) VALUES(?, '2000-01-01')", (tag,))
+        candidates = list(self.conn.execute('SELECT * FROM questions'))
+        anchor = self.add_question('exam',year=2009,tag=tag,number=99,stem='原始错题')
+        self.conn.execute("INSERT INTO sessions(id,kind,year,status) VALUES(80000,'exam',2009,'graded')")
+        self.conn.execute("INSERT INTO session_items(session_id,question_id,result) VALUES(80000,?,'wrong')",(anchor,))
+        row = self.conn.execute('SELECT * FROM questions WHERE id=?',(anchor,)).fetchone()
+        self.conn.execute('INSERT INTO relation_sources VALUES(?,?,?,?,?)',
+            (anchor,relations.fingerprint(row),json.dumps([tag]),len(candidates),len(candidates)))
+        self.conn.execute("INSERT INTO relation_build VALUES(1,'test','test','[]','2026-01-01',1,?)",(len(candidates),))
+        for candidate in candidates:
+            self.conn.execute('INSERT INTO question_relations VALUES(?,?,?,?,?,?)',
+                (anchor,candidate['id'],relations.fingerprint(candidate),90,3,'{}'))
 
     def test_import_is_additive_idempotent_and_keeps_existing_history(self):
         qid = self.add_question()

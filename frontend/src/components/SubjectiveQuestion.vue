@@ -14,7 +14,7 @@
       <QuestionAnnotationButton :question-id="question.id" :number="displayNo" />
     </div>
     <div class="qhtml font-song text-[16px] leading-[1.9]">
-      <span v-if="mode === 'reinforce'" class="text-muted">[{{ origin }}] </span>
+      <span v-if="mode !== 'exam'" class="text-muted">[{{ origin }}] </span>
       <span data-annotation-region="stem" v-html="question.stem_html"></span>
     </div>
 

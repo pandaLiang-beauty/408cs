@@ -35,6 +35,19 @@ bash stop-dev.sh
 
 ## 构建 / 部署
 
+当前服务器没有 systemd，使用静态模式：前端构建后由一个 Uvicorn 进程托管，
+同时提供 `5408` / `8408` 两个入口，无 Vite 常驻进程、无 `--reload`。
+Cloudflare Tunnel 可以继续指向 `5408`。
+
+```bash
+(cd frontend && npm run build -- --emptyOutDir false)
+bash stop-dev.sh
+bash start-prod.sh
+```
+
+访问地址保持 `http://127.0.0.1:5408/`；停止仍用 `bash stop-dev.sh`。
+修改前端后需要重新构建，修改后端后需要重启；日常使用无需运行开发服务。
+
 单机生产部署（创建虚拟环境、导入题库、构建前端、安装并重启 `cs408.service`）：
 
 ```bash
